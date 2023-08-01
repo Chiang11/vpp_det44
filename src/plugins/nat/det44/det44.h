@@ -41,18 +41,21 @@
 #include <nat/lib/inlines.h>
 #include <nat/lib/ipfix_logging.h>
 
+#include <vppinfra/bihash_8_8.h>
+#include <vppinfra/bihash_16_8.h>
+
 /* Session state */
-#define foreach_det44_session_state        \
-  _(0, UNKNOWN, "unknown")                 \
-  _(1, UDP_ACTIVE, "udp-active")           \
-  _(2, TCP_SYN_SENT, "tcp-syn-sent")       \
-  _(3, TCP_ESTABLISHED, "tcp-established") \
-  _(4, TCP_FIN_WAIT, "tcp-fin-wait")       \
-  _(5, TCP_CLOSE_WAIT, "tcp-close-wait")   \
-  _(6, TCP_CLOSING, "tcp-closing")         \
-  _(7, TCP_LAST_ACK, "tcp-last-ack")       \
-  _(8, TCP_CLOSED, "tcp-closed")           \
-  _(9, ICMP_ACTIVE, "icmp-active")
+#define foreach_det44_session_state         \
+  _ (0, UNKNOWN, "unknown")                 \
+  _ (1, UDP_ACTIVE, "udp-active")           \
+  _ (2, TCP_SYN_SENT, "tcp-syn-sent")       \
+  _ (3, TCP_ESTABLISHED, "tcp-established") \
+  _ (4, TCP_FIN_WAIT, "tcp-fin-wait")       \
+  _ (5, TCP_CLOSE_WAIT, "tcp-close-wait")   \
+  _ (6, TCP_CLOSING, "tcp-closing")         \
+  _ (7, TCP_LAST_ACK, "tcp-last-ack")       \
+  _ (8, TCP_CLOSED, "tcp-closed")           \
+  _ (9, ICMP_ACTIVE, "icmp-active")
 
 typedef enum
 {
@@ -95,6 +98,8 @@ typedef struct
   };
 } snat_det_out_key_t;
 
+
+
 typedef struct
 {
   /* Inside network port */
@@ -105,7 +110,9 @@ typedef struct
   u8 state;
   /* Expire timeout */
   u32 expire;
+
 } snat_det_session_t;
+
 
 typedef struct
 {
@@ -142,6 +149,58 @@ typedef struct
   u32 fib_index;
   u32 refcount;
 } det44_fib_t;
+
+/*******************************************************/
+/*********************** my modify begin *******************/
+
+// 有64个映射表
+#define MY_MAX_DET_MAPS 64
+// 每个映射表有64个外部地址，即64个会话表
+#define MY_SESS_TABLES_PER_MAP 64
+#define MY_PLEN 25
+// 每个会话表有 4096 个会话。每个外部地址对应两个内部地址
+#define MY_SESSIONS_PER_EXTERNAL_ADDR 4096
+
+typedef struct
+{
+  /* Inside network port */
+  u16 in_port;
+  /* Outside network address and port */
+  snat_det_out_key_t out;
+  /* Session state */
+  u8 state;
+  /* Expire timeout */
+  u32 expire;
+} my_session_t;
+
+
+typedef struct
+{
+  /* session counter */
+  u32 ses_num;
+  /* vector of sessions */
+  // sessions 里面存的是这个会话表里面4096个会话
+  my_session_t *my_sessions;
+} my_session_table_t;
+
+
+typedef struct
+{
+  /* inside IP address range */
+  ip4_address_t in_addr;
+  u8 in_plen;
+  /* outside IP address range */
+  ip4_address_t out_addr;
+  u8 out_plen;
+  /* inside IP addresses / outside IP addresses */
+  u32 sharing_ratio;
+  /* number of ports available to internal host */
+  u16 ports_per_host;
+  // sessions_tables 里面存的是这个映射表里面64个外部地址每个地址的会话表
+  // 一共64个
+  my_session_table_t *my_sessions_tables;
+} my_map_t;
+
 
 typedef struct det44_main_s
 {
@@ -186,21 +245,32 @@ typedef struct det44_main_s
   /* required */
   vnet_main_t *vnet_main;
 
+  /* --------------------my---------------------*/
+  // 哈希表
+  clib_bihash_8_8_t hash_table; 
+  // 映射表
+  my_map_t *my_maps;
+  /* --------------------my---------------------*/
+
 } det44_main_t;
+
 
 extern det44_main_t det44_main;
 
+/******************** my modify end *************************/
+/***********************************************************/
+
 /* logging */
 #define det44_log_err(...) \
-  vlib_log(VLIB_LOG_LEVEL_ERR, det44_main.log_class, __VA_ARGS__)
+  vlib_log (VLIB_LOG_LEVEL_ERR, det44_main.log_class, __VA_ARGS__)
 #define det44_log_warn(...) \
-  vlib_log(VLIB_LOG_LEVEL_WARNING, det44_main.log_class, __VA_ARGS__)
+  vlib_log (VLIB_LOG_LEVEL_WARNING, det44_main.log_class, __VA_ARGS__)
 #define det44_log_notice(...) \
-  vlib_log(VLIB_LOG_LEVEL_NOTICE, det44_main.log_class, __VA_ARGS__)
+  vlib_log (VLIB_LOG_LEVEL_NOTICE, det44_main.log_class, __VA_ARGS__)
 #define det44_log_info(...) \
-  vlib_log(VLIB_LOG_LEVEL_INFO, det44_main.log_class, __VA_ARGS__)
-#define det44_log_debug(...)\
-  vlib_log(VLIB_LOG_LEVEL_DEBUG, det44_main.log_class, __VA_ARGS__)
+  vlib_log (VLIB_LOG_LEVEL_INFO, det44_main.log_class, __VA_ARGS__)
+#define det44_log_debug(...) \
+  vlib_log (VLIB_LOG_LEVEL_DEBUG, det44_main.log_class, __VA_ARGS__)
 
 /* Deterministic NAT interface flags */
 #define DET44_INTERFACE_FLAG_IS_INSIDE 1
@@ -210,16 +280,15 @@ extern det44_main_t det44_main;
     @param i Deterministic NAT interface
     @return 1 if inside interface
 */
-#define det44_interface_is_inside(i) i->flags & DET44_INTERFACE_FLAG_IS_INSIDE
+#define det44_interface_is_inside(i) i->flags &DET44_INTERFACE_FLAG_IS_INSIDE
 
 /** \brief Check if Deterministic NAT interface is outside.
     @param i Deterministic NAT interface
     @return 1 if outside interface
 */
-#define det44_interface_is_outside(i) i->flags & DET44_INTERFACE_FLAG_IS_OUTSIDE
+#define det44_interface_is_outside(i) i->flags &DET44_INTERFACE_FLAG_IS_OUTSIDE
 
-static_always_inline u8
-plugin_enabled ()
+static_always_inline u8 plugin_enabled ()
 {
   det44_main_t *dm = &det44_main;
   return dm->enabled;
@@ -233,116 +302,127 @@ int det44_plugin_disable ();
 
 int det44_interface_add_del (u32 sw_if_index, u8 is_inside, int is_del);
 
-int det44_set_timeouts (nat_timeouts_t * timeouts);
+int det44_set_timeouts (nat_timeouts_t *timeouts);
 nat_timeouts_t det44_get_timeouts ();
 void det44_reset_timeouts ();
 
 /* format functions */
 format_function_t format_det_map_ses;
 
-int snat_det_add_map (ip4_address_t * in_addr, u8 in_plen,
-		      ip4_address_t * out_addr, u8 out_plen, int is_add);
+int snat_det_add_map (ip4_address_t *in_addr, u8 in_plen,
+                      ip4_address_t *out_addr, u8 out_plen, int is_add);
 
 /* icmp session match functions */
-u32 icmp_match_out2in_det (vlib_node_runtime_t * node,
-			   u32 thread_index, vlib_buffer_t * b0,
-			   ip4_header_t * ip0, ip4_address_t * addr,
-			   u16 * port, u32 * fib_index,
-			   nat_protocol_t * proto, void *d, void *e,
-			   u8 * dont_translate);
-u32 icmp_match_in2out_det (vlib_node_runtime_t * node,
-			   u32 thread_index, vlib_buffer_t * b0,
-			   ip4_header_t * ip0, ip4_address_t * addr,
-			   u16 * port, u32 * fib_index,
-			   nat_protocol_t * proto, void *d, void *e,
-			   u8 * dont_translate);
-u32 det44_icmp_in2out (vlib_buffer_t * b0, ip4_header_t * ip0,
-		       icmp46_header_t * icmp0, u32 sw_if_index0,
-		       u32 rx_fib_index0, vlib_node_runtime_t * node,
-		       u32 next0, u32 thread_index, void *d, void *e);
-u32 det44_icmp_out2in (vlib_buffer_t * b0, ip4_header_t * ip0,
-		       icmp46_header_t * icmp0, u32 sw_if_index0,
-		       u32 rx_fib_index0, vlib_node_runtime_t * node,
-		       u32 next0, u32 thread_index, void *d, void *e);
+u32 icmp_match_out2in_det (vlib_node_runtime_t *node, u32 thread_index,
+                           vlib_buffer_t *b0, ip4_header_t *ip0,
+                           ip4_address_t *addr, u16 *port, u32 *fib_index,
+                           nat_protocol_t *proto, void *d, void *e,
+                           u8 *dont_translate);
+u32 icmp_match_in2out_det (vlib_node_runtime_t *node, u32 thread_index,
+                           vlib_buffer_t *b0, ip4_header_t *ip0,
+                           ip4_address_t *addr, u16 *port, u32 *fib_index,
+                           nat_protocol_t *proto, void *d, void *e,
+                           u8 *dont_translate);
+u32 det44_icmp_in2out (vlib_buffer_t *b0, ip4_header_t *ip0,
+                       icmp46_header_t *icmp0, u32 sw_if_index0,
+                       u32 rx_fib_index0, vlib_node_runtime_t *node, u32 next0,
+                       u32 thread_index, void *d, void *e);
+u32 det44_icmp_out2in (vlib_buffer_t *b0, ip4_header_t *ip0,
+                       icmp46_header_t *icmp0, u32 sw_if_index0,
+                       u32 rx_fib_index0, vlib_node_runtime_t *node, u32 next0,
+                       u32 thread_index, void *d, void *e);
 
-static_always_inline int
-is_addr_in_net (ip4_address_t * addr, ip4_address_t * net, u8 plen)
+static_always_inline int is_addr_in_net (ip4_address_t *addr,
+                                         ip4_address_t *net, u8 plen)
 {
+  // 将ip地址与子网掩码按位与，然后比较网络地址是否相等
   if (net->as_u32 == (addr->as_u32 & ip4_main.fib_masks[plen]))
     return 1;
   return 0;
 }
 
+// 根据用户的IPv4地址查找并返回对应的SNAT映射
 static_always_inline snat_det_map_t *
-snat_det_map_by_user (ip4_address_t * user_addr)
+snat_det_map_by_user (ip4_address_t *user_addr)
 {
   det44_main_t *dm = &det44_main;
   snat_det_map_t *mp;
   /* *INDENT-OFF* */
-  pool_foreach (mp, dm->det_maps)
-   {
-    if (is_addr_in_net(user_addr, &mp->in_addr, mp->in_plen))
+  pool_foreach (mp, dm->det_maps) // 遍历
+  {
+    // 判断 源ip 是不是在 该子网内
+    if (is_addr_in_net (user_addr, &mp->in_addr, mp->in_plen))
       return mp;
   }
   /* *INDENT-ON* */
   return 0;
 }
 
+// 根据外部（公网）IPv4地址查找对应的SNAT映射
 static_always_inline snat_det_map_t *
-snat_det_map_by_out (ip4_address_t * out_addr)
+snat_det_map_by_out (ip4_address_t *out_addr)
 {
   det44_main_t *dm = &det44_main;
   snat_det_map_t *mp;
   /* *INDENT-OFF* */
   pool_foreach (mp, dm->det_maps)
-   {
-    if (is_addr_in_net(out_addr, &mp->out_addr, mp->out_plen))
+  {
+    if (is_addr_in_net (out_addr, &mp->out_addr, mp->out_plen))
       return mp;
   }
   /* *INDENT-ON* */
   return 0;
 }
 
-static_always_inline void
-snat_det_forward (snat_det_map_t * dm, ip4_address_t * in_addr,
-		  ip4_address_t * out_addr, u16 * lo_port)
+// 根据 映射表 和 内部地址 计算 外部地址 和 端口
+// dm 为映射表
+static_always_inline void snat_det_forward (snat_det_map_t *dm,
+                                            ip4_address_t *in_addr,
+                                            ip4_address_t *out_addr,
+                                            u16 *lo_port)
 {
   u32 in_offset, out_offset;
 
+  // 内部地址 的偏移量
+  // dm->in_addr.as_u32 为起始地址
   in_offset = clib_net_to_host_u32 (in_addr->as_u32) -
-    clib_net_to_host_u32 (dm->in_addr.as_u32);
+              clib_net_to_host_u32 (dm->in_addr.as_u32);
+  //
   out_offset = in_offset / dm->sharing_ratio;
-  out_addr->as_u32 =
-    clib_host_to_net_u32 (clib_net_to_host_u32 (dm->out_addr.as_u32) +
-			  out_offset);
+
+  // 计算得到 外部地址
+  out_addr->as_u32 = clib_host_to_net_u32 (
+      clib_net_to_host_u32 (dm->out_addr.as_u32) + out_offset);
+  // 计算得到 临时外部端口
   *lo_port = 1024 + dm->ports_per_host * (in_offset % dm->sharing_ratio);
 }
 
-static_always_inline void
-snat_det_reverse (snat_det_map_t * dm, ip4_address_t * out_addr, u16 out_port,
-		  ip4_address_t * in_addr)
+//
+static_always_inline void snat_det_reverse (snat_det_map_t *dm,
+                                            ip4_address_t *out_addr,
+                                            u16 out_port,
+                                            ip4_address_t *in_addr)
 {
   u32 in_offset1, in_offset2, out_offset;
 
   out_offset = clib_net_to_host_u32 (out_addr->as_u32) -
-    clib_net_to_host_u32 (dm->out_addr.as_u32);
+               clib_net_to_host_u32 (dm->out_addr.as_u32);
   in_offset1 = out_offset * dm->sharing_ratio;
   in_offset2 = (out_port - 1024) / dm->ports_per_host;
-  in_addr->as_u32 =
-    clib_host_to_net_u32 (clib_net_to_host_u32 (dm->in_addr.as_u32) +
-			  in_offset1 + in_offset2);
+  in_addr->as_u32 = clib_host_to_net_u32 (
+      clib_net_to_host_u32 (dm->in_addr.as_u32) + in_offset1 + in_offset2);
 }
 
-static_always_inline u32
-snat_det_user_ses_offset (ip4_address_t * addr, u8 plen)
+static_always_inline u32 snat_det_user_ses_offset (ip4_address_t *addr,
+                                                   u8 plen)
 {
   return (clib_net_to_host_u32 (addr->as_u32) & pow2_mask (32 - plen)) *
-    DET44_SES_PER_USER;
+         DET44_SES_PER_USER;
 }
 
 static_always_inline snat_det_session_t *
-snat_det_get_ses_by_out (snat_det_map_t * dm, ip4_address_t * in_addr,
-			 u64 out_key)
+snat_det_get_ses_by_out (snat_det_map_t *dm, ip4_address_t *in_addr,
+                         u64 out_key)
 {
   u32 user_offset;
   u16 i;
@@ -351,15 +431,15 @@ snat_det_get_ses_by_out (snat_det_map_t * dm, ip4_address_t * in_addr,
   for (i = 0; i < DET44_SES_PER_USER; i++)
     {
       if (dm->sessions[i + user_offset].out.as_u64 == out_key)
-	return &dm->sessions[i + user_offset];
+        return &dm->sessions[i + user_offset];
     }
 
   return 0;
 }
 
 static_always_inline snat_det_session_t *
-snat_det_find_ses_by_in (snat_det_map_t * dm, ip4_address_t * in_addr,
-			 u16 in_port, snat_det_out_key_t out_key)
+snat_det_find_ses_by_in (snat_det_map_t *dm, ip4_address_t *in_addr,
+                         u16 in_port, snat_det_out_key_t out_key)
 {
   snat_det_session_t *ses;
   u32 user_offset;
@@ -370,18 +450,18 @@ snat_det_find_ses_by_in (snat_det_map_t * dm, ip4_address_t * in_addr,
     {
       ses = &dm->sessions[i + user_offset];
       if (ses->in_port == in_port &&
-	  ses->out.ext_host_addr.as_u32 == out_key.ext_host_addr.as_u32 &&
-	  ses->out.ext_host_port == out_key.ext_host_port)
-	return &dm->sessions[i + user_offset];
+          ses->out.ext_host_addr.as_u32 == out_key.ext_host_addr.as_u32 &&
+          ses->out.ext_host_port == out_key.ext_host_port)
+        return &dm->sessions[i + user_offset];
     }
 
   return 0;
 }
 
 static_always_inline snat_det_session_t *
-snat_det_ses_create (u32 thread_index, snat_det_map_t * dm,
-		     ip4_address_t * in_addr, u16 in_port,
-		     snat_det_out_key_t * out)
+snat_det_ses_create (u32 thread_index, snat_det_map_t *dm,
+                     ip4_address_t *in_addr, u16 in_port,
+                     snat_det_out_key_t *out)
 {
   u32 user_offset;
   u16 i;
@@ -391,27 +471,26 @@ snat_det_ses_create (u32 thread_index, snat_det_map_t * dm,
   for (i = 0; i < DET44_SES_PER_USER; i++)
     {
       if (!dm->sessions[i + user_offset].in_port)
-	{
-	  if (clib_atomic_bool_cmp_and_swap
-	      (&dm->sessions[i + user_offset].in_port, 0, in_port))
-	    {
-	      dm->sessions[i + user_offset].out.as_u64 = out->as_u64;
-	      dm->sessions[i + user_offset].state = DET44_SESSION_UNKNOWN;
-	      dm->sessions[i + user_offset].expire = 0;
-	      clib_atomic_add_fetch (&dm->ses_num, 1);
-	      return &dm->sessions[i + user_offset];
-	    }
-	}
+        {
+          if (clib_atomic_bool_cmp_and_swap (
+                  &dm->sessions[i + user_offset].in_port, 0, in_port))
+            {
+              dm->sessions[i + user_offset].out.as_u64 = out->as_u64;
+              dm->sessions[i + user_offset].state = DET44_SESSION_UNKNOWN;
+              dm->sessions[i + user_offset].expire = 0;
+              clib_atomic_add_fetch (&dm->ses_num, 1);
+              return &dm->sessions[i + user_offset];
+            }
+        }
     }
 
-  nat_ipfix_logging_max_entries_per_user (thread_index,
-					  DET44_SES_PER_USER,
-					  in_addr->as_u32);
+  nat_ipfix_logging_max_entries_per_user (thread_index, DET44_SES_PER_USER,
+                                          in_addr->as_u32);
   return 0;
 }
 
-static_always_inline void
-snat_det_ses_close (snat_det_map_t * dm, snat_det_session_t * ses)
+static_always_inline void snat_det_ses_close (snat_det_map_t *dm,
+                                              snat_det_session_t *ses)
 {
   if (clib_atomic_bool_cmp_and_swap (&ses->in_port, ses->in_port, 0))
     {
@@ -420,7 +499,7 @@ snat_det_ses_close (snat_det_map_t * dm, snat_det_session_t * ses)
     }
 }
 
-clib_error_t *det44_api_hookup (vlib_main_t * vm);
+clib_error_t *det44_api_hookup (vlib_main_t *vm);
 
 #endif /* __included_det44_h__ */
 

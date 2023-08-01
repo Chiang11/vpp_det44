@@ -1484,6 +1484,98 @@ nat44_show_static_mappings_command_fn (vlib_main_t * vm,
   return 0;
 }
 
+
+// 我的函数
+static clib_error_t *
+my_nat44_find_static_mappings_command_fn (vlib_main_t * vm,
+				       unformat_input_t * input,
+				       vlib_cli_command_t * cmd)
+{
+  unformat_input_t _line_input, *line_input = &_line_input;
+  clib_error_t *error = 0;
+  ip4_address_t l_addr, e_addr; // 定义了l_addr 和 e_addr
+
+  snat_main_t *sm = &snat_main;
+  snat_static_mapping_t *m;
+  clib_bihash_kv_8_8_t kv, value;
+
+  // 根据 local 和 external 地址查到的静态映射索引值
+  u64 value_lo = -1;
+  u64 value_ex = -1;
+  bool lo = false;
+  bool ex = false;
+
+  /* 处理输入 */
+  // 只有地址，没有端口，addr_only = 1
+  if (!unformat_user (input, unformat_line_input, line_input))
+    return 0;
+
+  while (unformat_check_input (line_input) != UNFORMAT_END_OF_INPUT)
+    {
+      // 匹配到local后面有 地址 ，则 lo = true
+      if (unformat (line_input, "local %U", unformat_ip4_address, &l_addr))
+        lo = true;
+      // 匹配到external后面有 地址，则 ex = true
+      if (unformat (line_input, "external %U", unformat_ip4_address,
+      &e_addr))
+        ex = true;
+      //异常
+      else if(!lo && !ex)
+        {
+          error = clib_error_return (0, "unknown input: '%U'",
+                  format_unformat_error, line_input);
+          goto done;
+        }
+    }
+
+
+
+  // 初始化 结构体 kv，并将其中填入外部地址e_addr
+  // 使用external地址作为查询键（key）用于在哈希表中执行查询操作
+  if(ex)
+  {
+    init_nat_k (&kv, e_addr, 0, 0, 0);
+    if (clib_bihash_search_8_8 (&sm->static_mapping_by_external, &kv, &value))
+      m = 0;
+    else{
+      value_ex = value.value;
+      m = pool_elt_at_index (sm->static_mappings, value_ex);
+    }
+  }
+  
+  // 根据local地址进行查询
+  if(lo)
+  {
+    init_nat_k (&kv, l_addr, 0, 0, 0);
+    if (clib_bihash_search_8_8 (&sm->static_mapping_by_local, &kv, &value))
+      m = 0;
+    else{
+      value_lo = value.value;
+      m = pool_elt_at_index (sm->static_mappings, value_lo);
+    }
+  }
+
+
+  // 判断 上面两个索引是否一致，否则报错
+  // local 和 external 两个地址都有，判断 value_ex 和 value_lo是否一致
+  if(lo && ex)
+  {
+    if(value_lo == value_ex)
+      vlib_cli_output (vm, " %U", format_snat_static_mapping, m);
+    else 
+      error = clib_error_return (0, "The input local addr and external addr don't match"); 
+  }
+  else{
+    vlib_cli_output (vm, " %U", format_snat_static_mapping, m);
+  }
+
+  done:
+    unformat_free (line_input);
+
+  return error;
+}
+
+
 static clib_error_t *
 snat_add_interface_address_command_fn (vlib_main_t * vm,
 				       unformat_input_t * input,
@@ -2430,6 +2522,21 @@ VLIB_CLI_COMMAND (nat44_show_static_mappings_command, static) = {
   .short_help = "show nat44 static mappings",
   .function = nat44_show_static_mappings_command_fn,
 };
+
+/*?
+ * myfunction
+ *  vpp# nat44 show static mapping local 10.0.0.3
+ *  vpp# nat44 show static mapping external 4.4.4.4
+ *  vpp# nat44 show static mapping local 10.0.0.3 external 4.4.4.4
+?*/
+VLIB_CLI_COMMAND (my_nat44_find_static_mapping_command, static) = {
+  .path = "nat44 find static mapping",
+  .short_help =
+    "nat44 find static mapping local <addr> or external <addr>",
+  .function = my_nat44_find_static_mappings_command_fn,
+  
+};
+
 
 /*?
  * @cliexpar
