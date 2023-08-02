@@ -41,9 +41,6 @@
 #include <nat/lib/inlines.h>
 #include <nat/lib/ipfix_logging.h>
 
-#include <vppinfra/bihash_8_8.h>
-#include <vppinfra/bihash_16_8.h>
-
 /* Session state */
 #define foreach_det44_session_state         \
   _ (0, UNKNOWN, "unknown")                 \
@@ -98,7 +95,8 @@ typedef struct
   };
 } snat_det_out_key_t;
 
-
+/*******************************************************/
+/*********************** my modify begin *******************/
 
 typedef struct
 {
@@ -111,8 +109,19 @@ typedef struct
   /* Expire timeout */
   u32 expire;
 
+  u32 ex_addr_index;    // 外部地址的索引
+
+  u32 ex_in_addr_index; // 外部地址对应下的内部地址的索引
 } snat_det_session_t;
 
+typedef struct
+{
+  /* session counter */
+  u32 ses_num;
+  /* vector of sessions */
+  // sessions 里面存的是这个会话表里面4096个会话
+  snat_det_session_t *sessions;
+} snat_det_session_table_t;
 
 typedef struct
 {
@@ -126,10 +135,11 @@ typedef struct
   u32 sharing_ratio;
   /* number of ports available to internal host */
   u16 ports_per_host;
-  /* session counter */
-  u32 ses_num;
+  
   /* vector of sessions */
-  snat_det_session_t *sessions;
+  // sessions_tables 里面存的是这个映射表里面64个外部地址每个地址的会话表
+  // 一共64个
+  snat_det_session_table_t *sessions_tables;
 } snat_det_map_t;
 
 typedef struct
@@ -149,58 +159,6 @@ typedef struct
   u32 fib_index;
   u32 refcount;
 } det44_fib_t;
-
-/*******************************************************/
-/*********************** my modify begin *******************/
-
-// 有64个映射表
-#define MY_MAX_DET_MAPS 64
-// 每个映射表有64个外部地址，即64个会话表
-#define MY_SESS_TABLES_PER_MAP 64
-#define MY_PLEN 25
-// 每个会话表有 4096 个会话。每个外部地址对应两个内部地址
-#define MY_SESSIONS_PER_EXTERNAL_ADDR 4096
-
-typedef struct
-{
-  /* Inside network port */
-  u16 in_port;
-  /* Outside network address and port */
-  snat_det_out_key_t out;
-  /* Session state */
-  u8 state;
-  /* Expire timeout */
-  u32 expire;
-} my_session_t;
-
-
-typedef struct
-{
-  /* session counter */
-  u32 ses_num;
-  /* vector of sessions */
-  // sessions 里面存的是这个会话表里面4096个会话
-  my_session_t *my_sessions;
-} my_session_table_t;
-
-
-typedef struct
-{
-  /* inside IP address range */
-  ip4_address_t in_addr;
-  u8 in_plen;
-  /* outside IP address range */
-  ip4_address_t out_addr;
-  u8 out_plen;
-  /* inside IP addresses / outside IP addresses */
-  u32 sharing_ratio;
-  /* number of ports available to internal host */
-  u16 ports_per_host;
-  // sessions_tables 里面存的是这个映射表里面64个外部地址每个地址的会话表
-  // 一共64个
-  my_session_table_t *my_sessions_tables;
-} my_map_t;
-
 
 typedef struct det44_main_s
 {
@@ -246,17 +204,37 @@ typedef struct det44_main_s
   vnet_main_t *vnet_main;
 
   /* --------------------my---------------------*/
-  // 哈希表
-  clib_bihash_8_8_t in_addr_hash_table; 
-  clib_bihash_8_8_t out_addr_hash_table; 
-  // 映射表
-  my_map_t *my_maps;
-  /* --------------------my---------------------*/
+  clib_bihash_8_8_t translation_table; // 哈希表
 
 } det44_main_t;
 
-
 extern det44_main_t det44_main;
+
+// 有64个映射表
+#define MY_MAX_DET_MAPS 64
+// 每个映射表有64个外部地址，即64个会话表
+#define MY_SESS_TABLES_PER_MAP 64
+#define MY_PLEN 25
+// 每个会话表有 4096 个会话。每个外部地址对应两个内部地址
+#define MY_SESSIONS_PER_EXTERNAL_ADDR 4096
+
+// 定义4096个会话，由一个会话表指针管理
+snat_det_session_t *det_sessions = clib_mem_alloc (
+    sizeof (snat_det_session_t) * MY_SESSIONS_PER_EXTERNAL_ADDR);
+memset (det_sessions, 0,
+        sizeof (snat_det_session_t) * MY_SESSIONS_PER_EXTERNAL_ADDR);
+det44_main.det_maps->sessions_tables->sessions = det_sessions;
+// 定义64个会话表，由一个映射表管理
+snat_det_session_table_t *det_sessions_tables = clib_mem_alloc (
+    sizeof (snat_det_session_table_t) * MY_SESS_TABLES_PER_MAP);
+memset (det_sessions_tables, 0,
+        sizeof (snat_det_session_table_t) * MY_SESS_TABLES_PER_MAP);
+det44_main.det_maps->sessions_tables = det_sessions_tables;
+// 定义64个映射表，由一个det实例管理
+snat_det_map_t *det_maps =
+    clib_mem_alloc (sizeof (snat_det_map_t) * MY_MAX_DET_MAPS);
+memset (det_maps, 0, sizeof (snat_det_map_t) * MY_MAX_DET_MAPS);
+det44_main.det_maps = det_maps;
 
 /******************** my modify end *************************/
 /***********************************************************/

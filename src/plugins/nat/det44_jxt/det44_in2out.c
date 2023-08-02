@@ -32,12 +32,6 @@
 #include <nat/lib/inlines.h>
 #include <nat/lib/nat_inlines.h>
 
-///////////////////////////////////
-#include <vppinfra/bihash_8_8.h>
-#include <vppinfra/bihash_16_8.h>
-#include <stdlib.h>
-//////////////////////////////////
-
 typedef enum // 枚举类型, 表示不同的下一步处理方式
 {
   DET44_IN2OUT_NEXT_LOOKUP, // 表示需要进行下一步的查找操作。
@@ -440,13 +434,9 @@ VLIB_NODE_FN (det44_in2out_node)
 
   vlib_buffer_t *bufs[VLIB_FRAME_SIZE],
       **b = bufs; // 定义缓冲区指针数组用于存储数据包的缓冲区指针。
-  u16 nexts[VLIB_FRAME_SIZE], *next = nexts; // 定义下一跳数组用于存储数据包的下一跳索引。
+  u16 nexts[VLIB_FRAME_SIZE],
+      *next = nexts; // 定义下一跳数组用于存储数据包的下一跳索引。
   vlib_get_buffers (vm, from, b, n_left_from);
-
-  /*********************** my modify begin *******************/
-  my_map_t *mp0;
-  my_session_t *ses0 = 0;
-  /******************** my modify end *************************/
 
   while (n_left_from > 0) // 最后剩下一个，就处理一个
     {
@@ -455,12 +445,13 @@ VLIB_NODE_FN (det44_in2out_node)
       u32 sw_if_index0;
       ip4_header_t *ip0;
       ip_csum_t sum0;
-
+      ip4_address_t new_addr0, old_addr0;
+      u16 old_port0, new_port0, lo_port0, i0;
       udp_header_t *udp0;
       tcp_header_t *tcp0;
       u32 proto0;
       snat_det_out_key_t key0;
-
+      snat_det_session_t *ses0 = 0;
       u32 rx_fib_index0;
       icmp46_header_t *icmp0;
 
@@ -475,10 +466,42 @@ VLIB_NODE_FN (det44_in2out_node)
 
       sw_if_index0 = vnet_buffer (b0)->sw_if_index[VLIB_RX];
 
+      /*******************************************************/
       /*********************** my modify begin *******************/
-      ip4_address_t new_addr0 = {0}, old_addr0;
-      u16 old_port0, new_port0, lo_port0, i0;
+      // 生成映射表
+      // dm->det_maps[0]->in_addr.as_u32 = 192.168.1.0   10.2.1.0
+      // dm->det_maps[1]->in_addr.as_u32 = 192.168.2.0   10.2.2.0
+      // ...
+      // dm->det_maps[64]->in_addr.as_u32 = 192.168.64.0   10.2.64.0
+      ip4_address_t in_addr, out_addr;
+      for (int i = 0; i < MY_MAX_DET_MAPS; ++i)
+        {
+          dm->det_maps[i].in_plan = MY_PLEN;
+          dm->det_maps[i].out_plan = MY_PLEN;
+          // 192.168.1.0
+          dm->det_maps[i].in_addr.as_u32 = clib_host_to_net_u32 (0xC0A80100) +
+                                           clib_host_to_net_u32 (i << 8);
+          // 10.2.1.0
+          dm->det_maps[i].out_addr.as_u32 = clib_host_to_net_u32 (0x0A020100) +
+                                            clib_host_to_net_u32 (i << 8);
+        }
+
+      // 创建哈希表
+      clib_bihash_8_8_init (&dm->translation_table, "det44_translation_table",
+                            MY_MAX_DET_MAPS, 0);
+      // 初始化哈希表
+      for (int i = 0; i < MY_MAX_DET_MAPS; i++)
+        {
+          // 将每个映射表中的in_addr作为键，映射表的索引作为值，插入哈希表
+          clib_bihash_kv_8_8_t kv;
+          kv.key[0] = dm->det_maps[i].in_addr.as_u32;
+          kv.key[1] = 0;
+          kv.value = i;
+          clib_bihash_add_del_8_8 (&det44_main.translation_table, &kv, 1);
+        }
+
       /******************** my modify end *************************/
+      /***********************************************************/
 
       // 检查IPv4数据包的TTL（Time To Live）字段是否为1
       if (PREDICT_FALSE (ip0->ttl == 1))
@@ -510,21 +533,10 @@ VLIB_NODE_FN (det44_in2out_node)
       /*********************** my modify begin *******************/
       // 根据 源ip地址 查找映射表
       clib_bihash_kv_8_8_t kv;
-      clib_bihash_kv_8_8_t value;
-      kv.key = (u64)(ip0->src_address.as_u32 & ip4_main.fib_masks[MY_PLEN] )<< 32;
-      kv.value = 0;
-      value.key = 0;
-      value.value = 0;
-      clib_bihash_search_8_8 (&det44_main.in_addr_hash_table, &kv, &value);
-      // if (rv == 0) {
-      //     // 键存在于哈希表中，输出键值对的内容
-      //     vlib_cli_output (vm, "键: %llu, 值: %u\n", kv.key, value.value);
-      // } else {
-      //     // 键不存在于哈希表中，输出未找到的信息
-      //     vlib_cli_output (vm, "未找到键: %llu\n", kv.key);
-      // }
-
-      if (PREDICT_FALSE (value.value >= MY_MAX_DET_MAPS))
+      kv.key[0] = ip0->src_address.as_u32 & ip4_main.fib_masks[MY_PLEN];
+      kv.key[1] = 0; // IPv4地址，kv.key[1]应为0
+      clib_bihash_search_8_8 (&det44_main.translation_table, &kv);
+      if (PREDICT_FALSE (kv.value >= MY_MAX_DET_MAPS))
         {
           // 没找到对应的映射表，处理错误逻辑
           det44_log_info ("no match mapping for internal host ip %U",
@@ -534,13 +546,13 @@ VLIB_NODE_FN (det44_in2out_node)
           goto trace00;
         }
 
-      mp0 = &dm->my_maps[value.value];
+      snat_det_map_t *mp0 = dm->det_maps[kv.value];
 
       // 查找映射的外部地址相应的会话表
       // 计算偏移量
       // ip0->src_address.as_u8 为 192.168.10.0 - 192.168.10.127
-      u32 table_index = (ip0->src_address.as_u8[3] / 2);
-      if (table_index >= 64)
+      u32 addr_offset = (ip0->src_address.as_u8[3] / 2);
+      if (addr_offset >= 64)
         {
           det44_log_info ("invalid internal host ip %U", format_ip4_address,
                           &ip0->src_address);
@@ -549,54 +561,54 @@ VLIB_NODE_FN (det44_in2out_node)
           goto trace00;
         }
 
-      my_session_table_t *table0 = &mp0->my_sessions_tables[table_index];
+      snat_det_session_table_t *table0 = mp0->sessions_tables[addr_offset];
 
       // 将外部起始地址与偏移量相加得到映射到的外部地址
-      new_addr0.as_u32 = clib_host_to_net_u32 (
-          clib_net_to_host_u32 (mp0->out_addr.as_u32) + table_index);
+      ip4_address_t mapped_addr;
+      mapped_addr.as_u32 = clib_host_to_net_u32 (
+          clib_net_to_host_u32 (mp0->out_addr.as_u32) + addr_offset);
       // 是这个外部地址下的第一段或第二段端口范围
       u32 port_range_index = (ip0->src_address.as_u8[3] % 2);
-      // u16 port_range_start, port_range_end;
-      u16 port_range_start;
+      u16 port_range_start, port_range_end;
       if (port_range_index == 0)
         {
           port_range_start = PORT_RANGE_1_START;
-          // port_range_end = PORT_RANGE_1_END;
+          port_range_end = PORT_RANGE_1_END;
         }
       else
         {
           port_range_start = PORT_RANGE_2_START;
-          // port_range_end = PORT_RANGE_2_END;
+          port_range_end = PORT_RANGE_2_END;
         }
 
       // 计算要映射的外部端口，临时端口
-      lo_port0 = port_range_start;
+      u16 mapped_port = port_range_start;
 
       // 根据源ip，目标ip和端口查找会话
       key0.ext_host_addr = ip0->dst_address; // 目标ip地址
       key0.ext_host_port = tcp0->dst;        // 目标端口
 
-      // 找到映射的外部地址对应的会话
-      bool is_find = false;
-      for (i0 = 0; i0 < MY_SESSIONS_PER_EXTERNAL_ADDR / 2; i0++)
+      // 找到映射的外部地址对应的会话表
+      {
+        for (i0 = 0; i0 < MY_SESSIONS_PER_EXTERNAL_ADDR / 2; i0++)
         {
-          ses0 = &table0->my_sessions[i0 + lo_port0];
-          if (ses0->expire <= now)
+          snat_det_session_t *ses0 = table0->sessions[i0 + mapped_port];
+          if (s0->expire <= now)
             {
               continue; // 跳过已超时的会话
             }
-          if (ses0->in_port == tcp0->src &&
-              ses0->out.ext_host_addr.as_u32 == key0.ext_host_addr.as_u32 &&
-              ses0->out.ext_host_port == key0.ext_host_port)
+          if (s0->in_port == udp0->src_port &&
+              s0->out.ext_host_addr.as_u32 == mapped_addr.as_u32 &&
+              s0->out.ext_host_port == mapped_port)
             {
-              // 找到
-              new_port0 = i0 + lo_port0;
-              is_find = true;
-              break;
+              goto done;
             }
         }
-      // 没找到
-      if (!is_find) ses0 = 0;
+        ses0 = 0;
+      }
+      done:
+
+
 
       /******************** my modify end *************************/
       /***********************************************************/
@@ -604,32 +616,29 @@ VLIB_NODE_FN (det44_in2out_node)
       // 没找到，则创建会话
       if (PREDICT_FALSE (!ses0))
         {
-          bool is_create = false;
           // 循环会尝试不同的目标端口，直到找到一个可用的目标端口
           for (i0 = 0; i0 < MY_SESSIONS_PER_EXTERNAL_ADDR / 2; i0++)
             {
-              new_port0 = i0 + lo_port0;
-              ses0 = &table0->my_sessions[new_port0];
+              snat_det_session_t *s0 = table0->sessions[i0 + mapped_port];
 
               // 表示这个端口还没被用过
-              if (ses0->in_port == 0)
+              if (s0->in_port == 0)
                 {
-                  if (clib_atomic_bool_cmp_and_swap (&ses0->in_port, 0,
+                  if (clib_atomic_bool_cmp_and_swap (&s0->in_port, 0,
                                                      udp0->src_port))
                     {
-                      ses0->in_port = udp0->src_port;
-                      ses0->out.ext_host_addr.as_u32 = key0.ext_host_addr.as_u32;
-                      ses0->out.ext_host_port = key0.ext_host_port;
-                      ses0->state = DET44_SESSION_UNKNOWN;
-                      ses0->expire = now + dm->timeouts.tcp.transitory;
+                      s0->out.ext_host_addr = mapped_addr;
+                      s0->out.ext_host_port = mapped_port;
+                      s0->state = DET44_SESSION_UNKNOWN;
+                      s0->expire = now + dm->timeouts.tcp_transitory;
                       clib_atomic_add_fetch (&table0->ses_num, 1);
-                      is_create = true;
                       break;
                     }
                 }
             }
+
           // Det44会话数量达到上限，将数据包丢弃，并发送ICMP错误报文，通知发送者无法建立新的连接
-          if (!is_create)
+          if (PREDICT_FALSE (!ses0))
             {
               /* too many sessions for user, send ICMP error packet */
               vnet_buffer (b0)->sw_if_index[VLIB_TX] = (u32)~0;
@@ -641,18 +650,13 @@ VLIB_NODE_FN (det44_in2out_node)
               goto trace00;
             }
         }
-
       // 如果能查到会话，则直接使用查到的会话中的地址和端口号，而不是
       // snat_det_forward 转换后的地址和端口号
       old_port0 = udp0->src_port;
-      udp0->src_port = ses0->out.out_port = new_port0;
+      udp0->src_port = new_port0 = ses0->out.out_port;
 
       old_addr0.as_u32 = ip0->src_address.as_u32;
       ip0->src_address.as_u32 = new_addr0.as_u32;
-
-
-      //  vlib_cli_output (vm, "sessions tables index: %d, in %U/%d out %U/%d dst %U/%d\n", value.value, format_ip4_address,
-      //     &old_addr0, old_port0, format_ip4_address, &new_addr0, new_port0, format_ip4_address, &ip0->dst_address, tcp0->dst);
 
       // 将数据包的输出接口设置为Det44会话中指定的外部FIB表的索引值。这是为了确保转换后的数据包能够正确地路由出去。
       vnet_buffer (b0)->sw_if_index[VLIB_TX] = dm->outside_fib_index;
@@ -677,8 +681,7 @@ VLIB_NODE_FN (det44_in2out_node)
             ses0->state = DET44_SESSION_TCP_FIN_WAIT;
           else if (tcp0->flags & TCP_FLAG_ACK &&
                    ses0->state == DET44_SESSION_TCP_FIN_WAIT)
-            snat_det_ses_close ((snat_det_map_t *)mp0,
-                                (snat_det_session_t *)ses0);
+            snat_det_ses_close (mp0, ses0);
           else if (tcp0->flags & TCP_FLAG_FIN &&
                    ses0->state == DET44_SESSION_TCP_CLOSE_WAIT)
             ses0->state = DET44_SESSION_TCP_LAST_ACK;
@@ -738,7 +741,7 @@ VLIB_NODE_FN (det44_in2out_node)
           t->next_index = next0;
           t->session_index = ~0;
           if (ses0)
-            t->session_index = ses0 - table0->my_sessions;
+            t->session_index = ses0 - mp0->sessions;
         }
 
       pkts_processed += next0 != DET44_IN2OUT_NEXT_DROP;

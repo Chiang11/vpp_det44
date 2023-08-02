@@ -77,98 +77,16 @@ static clib_error_t *det44_show_mappings_command_fn (vlib_main_t *vm,
     vlib_cli_output (vm, " in %U/%d out %U/%d\n", format_ip4_address,
                      &mp->in_addr, mp->in_plen, format_ip4_address,
                      &mp->out_addr, mp->out_plen);
+    /*
     vlib_cli_output (vm, "  outside address sharing ratio: %d\n",
                      mp->sharing_ratio);
     vlib_cli_output (vm, "  number of ports per inside host: %d\n",
                      mp->ports_per_host);
     vlib_cli_output (vm, "  sessions number: %d\n", mp->ses_num);
+    */
   }
   /* *INDENT-ON* */
   return 0;
-}
-
-/////////////////////////////////////////////////////////////////
-// my function
-//////////////////////////////////////////////////////////////
-static clib_error_t *
-det44_show_my_mappings_command_fn (vlib_main_t *vm, unformat_input_t *input,
-                                   vlib_cli_command_t *cmd)
-{
-  det44_main_t *dm = &det44_main;
-  my_map_t *mp;
-  vlib_cli_output (vm, "DET44 deterministic mappings:");
-  /* *INDENT-OFF* */
-
-
-  /* *INDENT-OFF* */
-  for (u16 i0 = 0; i0 < MY_MAX_DET_MAPS; i0++)
-  {
-    mp = &dm->my_maps[i0];
-    if(mp->in_plen == 0)
-    {
-      vlib_cli_output (vm, "please enable det44 first");
-      return 0;
-    }
-    vlib_cli_output (vm, " in %U/%d out %U/%d\n", format_ip4_address,
-                      &mp->in_addr, mp->in_plen, format_ip4_address,
-                      &mp->out_addr, mp->out_plen);
-  }
-  
-  // pool_foreach (mp, dm->my_maps) // 不能用pool_foreach，应该用vec_foreach？？
-  // {
-  //   if(mp->in_plen == 0)
-  //   {
-  //     vlib_cli_output (vm, "please enable det44 first");
-  //     return 0;
-  //   }
-  //   vlib_cli_output (vm, " in %U/%d out %U/%d\n", format_ip4_address,
-  //                     &mp->in_addr, mp->in_plen, format_ip4_address,
-  //                     &mp->out_addr, mp->out_plen);
-  // }
-  /* *INDENT-ON* */
-  return 0;
-}
-
-
-/********************* show hash ****************************/
-static clib_error_t *
-det44_show_my_hash_command_fn (vlib_main_t *vm, unformat_input_t *input,
-                                   vlib_cli_command_t *cmd)
-{
-  det44_main_t *dm = &det44_main;
-  vlib_cli_output (vm, "DET44 hash:");
-  /* *INDENT-OFF* */
-
-
-  /* *INDENT-OFF* */
-  clib_bihash_kv_8_8_t kv0;
-  clib_bihash_kv_8_8_t kv;
-  u32 value;
-  int rv;
-  u16 i0;
-
-  for (i0 = 0; i0 < MY_MAX_DET_MAPS; i0++) {
-      // 构造要查找的键
-      kv0.key = (u64)dm->my_maps[i0].in_addr.as_u32 << 32;
-      kv0.value = 0;
-      kv.key = 0;
-      kv.value = 0;
-
-      // 在哈希表中查找键对应的值
-      rv = clib_bihash_search_8_8(&det44_main.in_addr_hash_table, &kv0, &kv);
-
-      if (rv == 0) {
-          // 键存在于哈希表中，输出键值对的内容
-          value = kv.value;
-          vlib_cli_output (vm, "键: %llu, 值: %u\n", kv0.key, value);
-      } else {
-          // 键不存在于哈希表中，输出未找到的信息
-          vlib_cli_output (vm, "未找到键: %llu\n", kv0.key);
-      }
-  }
-  /* *INDENT-ON* */
-
-    return 0;
 }
 
 static clib_error_t *det44_forward_command_fn (vlib_main_t *vm,
@@ -610,23 +528,6 @@ VLIB_CLI_COMMAND (det44_show_mappings_command, static) = {
     .short_help = "show det44 mappings",
     .function = det44_show_mappings_command_fn,
 };
-
-// my function
-// 输出我的映射表
-VLIB_CLI_COMMAND (det44_show_my_mappings_command, static) = {
-    .path = "show my det44 mappings",
-    .short_help = "show my det44 mappings",
-    .function = det44_show_my_mappings_command_fn,
-};
-// 打印哈希表中所有元素
-VLIB_CLI_COMMAND (show_my_hash_command, static) = {
-    .path = "show my hash",
-    .short_help = "show my hash",
-    .function = det44_show_my_hash_command_fn,
-};
-
-
-
 
 /*?
  * @cliexpar

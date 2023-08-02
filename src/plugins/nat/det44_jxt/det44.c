@@ -383,65 +383,6 @@ int det44_plugin_enable (det44_config_t c)
   dm->mss_clamping = 0;
   dm->config = c;
   dm->enabled = 1;
-
-
-  /*-------------------------------------------------------------*/
-  u16 i0, j0;
-
-  // 分配内存
-  static my_map_t empty_my_map = {0};
-  static my_session_table_t empty_my_session_table = {0};
-  static my_session_t empty_my_session = {0};
-
-  vec_validate_init_empty (dm->my_maps, MY_MAX_DET_MAPS, empty_my_map);
-  for (i0 = 0; i0 < MY_MAX_DET_MAPS; i0++)
-  {
-    vec_validate_init_empty (dm->my_maps[i0].my_sessions_tables,
-                              MY_SESS_TABLES_PER_MAP, empty_my_session_table);
-    for (j0 = 0; j0 < MY_SESS_TABLES_PER_MAP; j0++)
-    {
-      vec_validate_init_empty (dm->my_maps[i0].my_sessions_tables[j0].my_sessions,
-                                MY_SESSIONS_PER_EXTERNAL_ADDR,
-                                empty_my_session);
-    }
-  }
-  
-  // 初始化映射表
-  for (i0 = 0; i0 < MY_MAX_DET_MAPS; i0++)
-    {
-      // 初始化映射表的成员变量
-      dm->my_maps[i0].in_plen = MY_PLEN;
-      dm->my_maps[i0].out_plen = MY_PLEN;
-      dm->my_maps[i0].sharing_ratio = 1;
-      dm->my_maps[i0].ports_per_host = 1;
-
-      // 初始化映射表的地址范围
-      dm->my_maps[i0].in_addr.as_u32 =
-          clib_host_to_net_u32 (0xC0A80100) + clib_host_to_net_u32 (i0 << 8);
-      dm->my_maps[i0].out_addr.as_u32 =
-          clib_host_to_net_u32 (0x0A020100) + clib_host_to_net_u32 (i0 << 8);
-    }
-  
-  // 创建 in_addr -> 哈希表
-  clib_bihash_init_8_8 (&dm->in_addr_hash_table, "my_in_addr_hash_table", MY_MAX_DET_MAPS, 0);
-  // 创建 out_addr -> 哈希表
-  clib_bihash_init_8_8 (&dm->out_addr_hash_table, "my_out_addr_hash_table", MY_MAX_DET_MAPS, 0);
-
-  // 初始化哈希表
-  for (i0 = 0; i0 < MY_MAX_DET_MAPS; i0++)
-    {
-      // 将每个映射表中的in_addr作为键，映射表的索引作为值，插入哈希表
-      clib_bihash_kv_8_8_t kv;
-      kv.key = (u64)dm->my_maps[i0].in_addr.as_u32 << 32;
-      kv.value = i0;
-      clib_bihash_add_del_8_8 (&det44_main.in_addr_hash_table, &kv, 1);
-
-      kv.key = (u64)dm->my_maps[i0].out_addr.as_u32 << 32;
-      kv.value = i0;
-      clib_bihash_add_del_8_8 (&det44_main.out_addr_hash_table, &kv, 1);
-    }
-
-
   return 0;
 }
 
@@ -606,6 +547,8 @@ static clib_error_t *det44_init (vlib_main_t *vm)
 
   det44_reset_timeouts (); // 重置超时值
   return det44_api_hookup (vm);
+
+  
 }
 
 // 在VPP启动时调用det44_init函数，从而完成Det44插件的初始化过程。
