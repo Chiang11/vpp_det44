@@ -14,11 +14,11 @@
  */
 /**
  * @file
- * @brief DET44 CLI
+ * @brief jxt CLI
  */
-#include <nat/det44/det44.h>
+#include <plugins/jxt/jxt.h>
 
-static clib_error_t *det44_map_command_fn (vlib_main_t *vm,
+static clib_error_t *jxt_map_command_fn (vlib_main_t *vm,
                                            unformat_input_t *input,
                                            vlib_cli_command_t *cmd)
 {
@@ -64,11 +64,11 @@ done:
   return error;
 }
 
-static clib_error_t *det44_show_mappings_command_fn (vlib_main_t *vm,
+static clib_error_t *jxt_show_mappings_command_fn (vlib_main_t *vm,
                                                      unformat_input_t *input,
                                                      vlib_cli_command_t *cmd)
 {
-  det44_main_t *dm = &det44_main;
+  jxt_main_t *dm = &jxt_main;
   snat_det_map_t *mp;
   vlib_cli_output (vm, "NAT44 deterministic mappings:");
   /* *INDENT-OFF* */
@@ -87,38 +87,35 @@ static clib_error_t *det44_show_mappings_command_fn (vlib_main_t *vm,
   return 0;
 }
 
+
 /////////////////////////////////////////////////////////////////
 // my function
 //////////////////////////////////////////////////////////////
 static clib_error_t *
-det44_show_my_mappings_command_fn (vlib_main_t *vm, unformat_input_t *input,
+jxt_show_my_mappings_command_fn (vlib_main_t *vm, unformat_input_t *input,
                                    vlib_cli_command_t *cmd)
 {
-  det44_main_t *dm = &det44_main;
-  my_map_t *mp;
-  vlib_cli_output (vm, "DET44 deterministic mappings:");
-  /* *INDENT-OFF* */
+  jxt_main_t *dm = &jxt_main;
+  my_user_t *user0;
+  vlib_cli_output (vm, "jxt deterministic mappings:");
 
-
-  /* *INDENT-OFF* */
-  for (u16 i0 = 0; i0 < MY_MAX_DET_MAPS; i0++)
+  for (u16 i0 = 0; i0 < MY_USERS; i0++)
   {
-    mp = &dm->my_maps[i0];
-    if(mp->in_plen == 0)
+    user0 = &dm->my_users[i0];
+    if(user0->in_addr.as_u32 != 0)
     {
-      vlib_cli_output (vm, "please enable det44 first");
-      return 0;
+      vlib_cli_output (vm, " in %U out %U start_port: %d\n", format_ip4_address,
+                      &user0->in_addr, format_ip4_address,
+                      &user0->out_addr, user0->lo_port);
     }
-    vlib_cli_output (vm, " in %U/%d out %U/%d\n", format_ip4_address,
-                      &mp->in_addr, mp->in_plen, format_ip4_address,
-                      &mp->out_addr, mp->out_plen);
+    
   }
   
   // pool_foreach (mp, dm->my_maps) // 不能用pool_foreach，应该用vec_foreach？？
   // {
   //   if(mp->in_plen == 0)
   //   {
-  //     vlib_cli_output (vm, "please enable det44 first");
+  //     vlib_cli_output (vm, "please enable jxt first");
   //     return 0;
   //   }
   //   vlib_cli_output (vm, " in %U/%d out %U/%d\n", format_ip4_address,
@@ -130,48 +127,111 @@ det44_show_my_mappings_command_fn (vlib_main_t *vm, unformat_input_t *input,
 }
 
 
-/********************* show hash ****************************/
-// static clib_error_t *
-// det44_show_my_hash_command_fn (vlib_main_t *vm, unformat_input_t *input,
-//                                    vlib_cli_command_t *cmd)
-// {
-//   det44_main_t *dm = &det44_main;
-//   vlib_cli_output (vm, "DET44 hash:");
-//   /* *INDENT-OFF* */
+
+/********************* show in hash ****************************/
+static clib_error_t *
+jxt_show_my_in_hash_command_fn (vlib_main_t *vm, unformat_input_t *input,
+                                   vlib_cli_command_t *cmd)
+{
+  jxt_main_t *dm = &jxt_main;
+
+  clib_bihash_kv_8_8_t kv0;
+  clib_bihash_kv_8_8_t kv;
+  u32 value;
+  int rv;
+  u16 i0;
+
+  vlib_cli_output (vm, "jxt in_hash:");
+  for (i0 = 0; i0 < MY_USERS; i0++) 
+  {
+    // 构造要查找的键
+    kv0.key = (u64)dm->my_users[i0].in_addr.as_u32 << 32;
+    kv0.value = 0;
+    kv.key = 0;
+    kv.value = 0;
+
+    // 在哈希表中查找键对应的值
+    rv = clib_bihash_search_8_8(&jxt_main.in_hash_table, &kv0, &kv);
+
+    if (rv == 0) {
+        // 键存在于哈希表中，输出键值对的内容
+        value = kv.value;
+        vlib_cli_output (vm, "键: %U, 值: %u\n", format_ip4_address,
+                      &dm->my_users[i0].in_addr, value);
+    } else {
+        // 键不存在于哈希表中，输出未找到的信息
+        vlib_cli_output (vm, "未找到键: %U\n", format_ip4_address,
+                      &dm->my_users[i0].in_addr);
+    }
+  }
+  return 0;
+}
 
 
-//   /* *INDENT-OFF* */
-//   clib_bihash_kv_8_8_t kv0;
-//   clib_bihash_kv_8_8_t kv;
-//   u32 value;
-//   int rv;
-//   u16 i0;
+/********************* show out hash ****************************/
+static clib_error_t *
+jxt_show_my_out_hash_command_fn (vlib_main_t *vm, unformat_input_t *input,
+                                   vlib_cli_command_t *cmd)
+{
+  jxt_main_t *dm = &jxt_main;
 
-//   for (i0 = 0; i0 < MY_MAX_DET_MAPS; i0++) {
-//       // 构造要查找的键
-//       kv0.key = (u64)dm->my_maps[i0].in_addr.as_u32 << 32;
-//       kv0.value = 0;
-//       kv.key = 0;
-//       kv.value = 0;
+  clib_bihash_kv_8_8_t kv0;
+  clib_bihash_kv_8_8_t kv;
+  u32 value;
+  int rv;
+  u16 i0;
 
-//       // 在哈希表中查找键对应的值
-//       rv = clib_bihash_search_8_8(&det44_main.in_addr_hash_table, &kv0, &kv);
+  vlib_cli_output (vm, "jxt out_hash:");
+  for (i0 = 0; i0 < MY_USERS; i0++) 
+  {
+    if(i0 % 2 ==0)
+    {
+      // 构造要查找的键
+      kv0.key = (u64)(((u64)dm->my_users[i0].out_addr.as_u32 << 32) + 0);
+      kv0.value = 0;
+      kv.key = 0;
+      kv.value = 0;
 
-//       if (rv == 0) {
-//           // 键存在于哈希表中，输出键值对的内容
-//           value = kv.value;
-//           vlib_cli_output (vm, "键: %llu, 值: %u\n", kv0.key, value);
-//       } else {
-//           // 键不存在于哈希表中，输出未找到的信息
-//           vlib_cli_output (vm, "未找到键: %llu\n", kv0.key);
-//       }
-//   }
-//   /* *INDENT-ON* */
+      // 在哈希表中查找键对应的值
+      rv = clib_bihash_search_8_8(&jxt_main.out_hash_table, &kv0, &kv);
 
-//     return 0;
-// }
+      if (rv == 0) {
+          // 键存在于哈希表中，输出键值对的内容
+          value = kv.value;
+          vlib_cli_output (vm, "键: %U, lo_port: %d, 值: %u\n", format_ip4_address,
+                      &dm->my_users[i0].out_addr, dm->my_users[i0].lo_port, value);
+      } else {
+          // 键不存在于哈希表中，输出未找到的信息
+          vlib_cli_output (vm, "未找到键: %llu\n", kv0.key);
+      }
+    }
+    else
+    {
+      // 构造要查找的键
+      kv0.key = (u64)(((u64)dm->my_users[i0].out_addr.as_u32 << 32) + 1);
+      kv0.value = 0;
+      kv.key = 0;
+      kv.value = 0;
 
-static clib_error_t *det44_forward_command_fn (vlib_main_t *vm,
+      // 在哈希表中查找键对应的值
+      rv = clib_bihash_search_8_8(&jxt_main.out_hash_table, &kv0, &kv);
+
+      if (rv == 0) {
+          // 键存在于哈希表中，输出键值对的内容
+          value = kv.value;
+          vlib_cli_output (vm, "键: %U, lo_port: %d, 值: %u\n", format_ip4_address,
+                      &dm->my_users[i0].out_addr, dm->my_users[i0].lo_port, value);
+      } else {
+          // 键不存在于哈希表中，输出未找到的信息
+          vlib_cli_output (vm, "未找到键: %llu\n", kv0.key);
+      }
+    }
+  }
+  return 0;
+}
+
+
+static clib_error_t *jxt_forward_command_fn (vlib_main_t *vm,
                                                unformat_input_t *input,
                                                vlib_cli_command_t *cmd)
 {
@@ -212,7 +272,7 @@ done:
   return error;
 }
 
-static clib_error_t *det44_reverse_command_fn (vlib_main_t *vm,
+static clib_error_t *jxt_reverse_command_fn (vlib_main_t *vm,
                                                unformat_input_t *input,
                                                vlib_cli_command_t *cmd)
 {
@@ -259,11 +319,11 @@ done:
   return error;
 }
 
-static clib_error_t *det44_show_sessions_command_fn (vlib_main_t *vm,
+static clib_error_t *jxt_show_sessions_command_fn (vlib_main_t *vm,
                                                      unformat_input_t *input,
                                                      vlib_cli_command_t *cmd)
 {
-  det44_main_t *dm = &det44_main;
+  jxt_main_t *dm = &jxt_main;
   snat_det_session_t *ses;
   snat_det_map_t *mp;
   vlib_cli_output (vm, "NAT44 deterministic sessions:");
@@ -282,7 +342,7 @@ static clib_error_t *det44_show_sessions_command_fn (vlib_main_t *vm,
   return 0;
 }
 
-static clib_error_t *det44_close_session_out_fn (vlib_main_t *vm,
+static clib_error_t *jxt_close_session_out_fn (vlib_main_t *vm,
                                                  unformat_input_t *input,
                                                  vlib_cli_command_t *cmd)
 {
@@ -334,7 +394,7 @@ done:
   return error;
 }
 
-static clib_error_t *det44_close_session_in_fn (vlib_main_t *vm,
+static clib_error_t *jxt_close_session_in_fn (vlib_main_t *vm,
                                                 unformat_input_t *input,
                                                 vlib_cli_command_t *cmd)
 {
@@ -384,7 +444,7 @@ done:
   return error;
 }
 
-static clib_error_t *det44_set_timeouts_command_fn (vlib_main_t *vm,
+static clib_error_t *jxt_set_timeouts_command_fn (vlib_main_t *vm,
                                                     unformat_input_t *input,
                                                     vlib_cli_command_t *cmd)
 {
@@ -420,24 +480,24 @@ static clib_error_t *det44_set_timeouts_command_fn (vlib_main_t *vm,
 
   if (!reset)
     {
-      if (det44_set_timeouts (&timeouts))
+      if (jxt_set_timeouts (&timeouts))
         {
           error = clib_error_return (0, "error configuring timeouts");
         }
     }
   else
-    det44_reset_timeouts ();
+    jxt_reset_timeouts ();
 done:
   unformat_free (line_input);
   return error;
 }
 
-static clib_error_t *det44_show_timeouts_command_fn (vlib_main_t *vm,
+static clib_error_t *jxt_show_timeouts_command_fn (vlib_main_t *vm,
                                                      unformat_input_t *input,
                                                      vlib_cli_command_t *cmd)
 {
   nat_timeouts_t timeouts;
-  timeouts = det44_get_timeouts ();
+  timeouts = jxt_get_timeouts ();
   vlib_cli_output (vm, "udp timeout: %dsec", timeouts.udp);
   vlib_cli_output (vm, "tcp established timeout: %dsec",
                    timeouts.tcp.established);
@@ -447,13 +507,13 @@ static clib_error_t *det44_show_timeouts_command_fn (vlib_main_t *vm,
   return 0;
 }
 
-static clib_error_t *det44_plugin_enable_disable_command_fn (
+static clib_error_t *jxt_plugin_enable_disable_command_fn (
     vlib_main_t *vm, unformat_input_t *input, vlib_cli_command_t *cmd)
 {
   unformat_input_t _line_input, *line_input = &_line_input;
   u8 enable = 0, is_set = 0;
   clib_error_t *error = 0;
-  det44_config_t c = {0};
+  jxt_config_t c = {0};
 
   if (!unformat_user (input, unformat_line_input, line_input))
     return 0;
@@ -479,12 +539,12 @@ static clib_error_t *det44_plugin_enable_disable_command_fn (
 
   if (enable)
     {
-      if (det44_plugin_enable (c))
+      if (jxt_plugin_enable (c))
         error = clib_error_return (0, "plugin enable failed");
     }
   else
     {
-      if (det44_plugin_disable ())
+      if (jxt_plugin_disable ())
         error = clib_error_return (0, "plugin disable failed");
     }
 done:
@@ -498,7 +558,7 @@ typedef struct
   u8 is_inside;
 } sw_if_indices_t;
 
-static clib_error_t *det44_feature_command_fn (vlib_main_t *vm,
+static clib_error_t *jxt_feature_command_fn (vlib_main_t *vm,
                                                unformat_input_t *input,
                                                vlib_cli_command_t *cmd)
 {
@@ -538,7 +598,7 @@ static clib_error_t *det44_feature_command_fn (vlib_main_t *vm,
   /* *INDENT-OFF* */
   vec_foreach (p, sw_if_indices)
   {
-    if (det44_interface_add_del (p->sw_if_index, p->is_inside, is_del))
+    if (jxt_interface_add_del (p->sw_if_index, p->is_inside, is_del))
       {
         error = clib_error_return (
             0, "%s %s %U failed", is_del ? "del" : "add",
@@ -554,22 +614,22 @@ done:
   return error;
 }
 
-static clib_error_t *det44_show_interfaces_command_fn (vlib_main_t *vm,
+static clib_error_t *jxt_show_interfaces_command_fn (vlib_main_t *vm,
                                                        unformat_input_t *input,
                                                        vlib_cli_command_t *cmd)
 {
   vnet_main_t *vnm = vnet_get_main ();
-  det44_main_t *dm = &det44_main;
-  det44_interface_t *i;
-  vlib_cli_output (vm, "DET44 interfaces:");
+  jxt_main_t *dm = &jxt_main;
+  jxt_interface_t *i;
+  vlib_cli_output (vm, "jxt interfaces:");
   /* *INDENT-OFF* */
   pool_foreach (i, dm->interfaces)
   {
     vlib_cli_output (
         vm, " %U %s", format_vnet_sw_if_index_name, vnm, i->sw_if_index,
-        (det44_interface_is_inside (i) && det44_interface_is_outside (i))
+        (jxt_interface_is_inside (i) && jxt_interface_is_outside (i))
             ? "in out"
-            : (det44_interface_is_inside (i) ? "in" : "out"));
+            : (jxt_interface_is_inside (i) ? "in" : "out"));
   }
   /* *INDENT-ON* */
   return 0;
@@ -578,92 +638,98 @@ static clib_error_t *det44_show_interfaces_command_fn (vlib_main_t *vm,
 /* *INDENT-OFF* */
 /*?
  * @cliexpar
- * @cliexstart{det44 add}
+ * @cliexstart{jxt add}
  * Create bijective mapping of inside address to outside address and port range
- * pairs, with the purpose of enabling DET44 to reduce logging in CGN
+ * pairs, with the purpose of enabling jxt to reduce logging in CGN
  * deployments.
  * To create mapping between inside network 10.0.0.0/18 and
  * outside network 1.1.1.0/30 use:
- * # vpp# det44 add in 10.0.0.0/18 out 1.1.1.0/30
+ * # vpp# jxt add in 10.0.0.0/18 out 1.1.1.0/30
  * @cliexend
 ?*/
-VLIB_CLI_COMMAND (det44_map_command, static) = {
-    .path = "det44 add",
-    .short_help = "det44 add in <addr>/<plen> out <addr>/<plen> [del]",
-    .function = det44_map_command_fn,
+VLIB_CLI_COMMAND (jxt_map_command, static) = {
+    .path = "jxt add",
+    .short_help = "jxt add in <addr>/<plen> out <addr>/<plen> [del]",
+    .function = jxt_map_command_fn,
 };
 
 /*?
  * @cliexpar
- * @cliexpstart{show det44 mappings}
- * Show DET44 mappings
- * vpp# show det44 mappings
- * DET44 mappings:
+ * @cliexpstart{show jxt mappings}
+ * Show jxt mappings
+ * vpp# show jxt mappings
+ * jxt mappings:
  *  in 10.0.0.0/24 out 1.1.1.1/32
  *   outside address sharing ratio: 256
  *   number of ports per inside host: 252
  *   sessions number: 0
  * @cliexend
 ?*/
-VLIB_CLI_COMMAND (det44_show_mappings_command, static) = {
-    .path = "show det44 mappings",
-    .short_help = "show det44 mappings",
-    .function = det44_show_mappings_command_fn,
+VLIB_CLI_COMMAND (jxt_show_mappings_command, static) = {
+    .path = "show jxt mappings",
+    .short_help = "show jxt mappings",
+    .function = jxt_show_mappings_command_fn,
 };
 
 // my function
 // 输出我的映射表
-VLIB_CLI_COMMAND (det44_show_my_mappings_command, static) = {
-    .path = "show my det44 mappings",
-    .short_help = "show my det44 mappings",
-    .function = det44_show_my_mappings_command_fn,
+VLIB_CLI_COMMAND (jxt_show_my_mappings_command, static) = {
+    .path = "show my jxt mappings",
+    .short_help = "show my jxt mappings",
+    .function = jxt_show_my_mappings_command_fn,
 };
-// // 打印哈希表中所有元素
-// VLIB_CLI_COMMAND (det44_show_my_hash_command, static) = {
-//     .path = "show my hash",
-//     .short_help = "show my hash",
-//     .function = det44_show_my_hash_command_fn,
 // };
+// 打印哈希表中所有元素
+VLIB_CLI_COMMAND (jxt_show_my_in_hash_command, static) = {
+    .path = "show my in hash",
+    .short_help = "show my in hash",
+    .function = jxt_show_my_in_hash_command_fn,
+};
+VLIB_CLI_COMMAND (jxt_show_my_out_hash_command, static) = {
+    .path = "show my out hash",
+    .short_help = "show my out hash",
+    .function = jxt_show_my_out_hash_command_fn,
+};
 // 设置映射后的网段范围
 
 
 
 /*?
  * @cliexpar
- * @cliexstart{det44 forward}
- * Return outside address and port range from inside address for DET44.
+ * @cliexstart{jxt forward}
+ * Return outside address and port range from inside address for jxt.
  * To obtain outside address and port of inside host use:
- *  vpp# det44 forward 10.0.0.2
+ *  vpp# jxt forward 10.0.0.2
  *  1.1.1.0:<1054-1068>
  * @cliexend
 ?*/
-VLIB_CLI_COMMAND (det44_forward_command, static) = {
-    .path = "det44 forward",
-    .short_help = "det44 forward <addr>",
-    .function = det44_forward_command_fn,
+VLIB_CLI_COMMAND (jxt_forward_command, static) = {
+    .path = "jxt forward",
+    .short_help = "jxt forward <addr>",
+    .function = jxt_forward_command_fn,
 };
 
 /*?
  * @cliexpar
- * @cliexstart{det44 reverse}
- * Return inside address from outside address and port for DET44.
+ * @cliexstart{jxt reverse}
+ * Return inside address from outside address and port for jxt.
  * To obtain inside host address from outside address and port use:
- *  #vpp det44 reverse 1.1.1.1:1276
+ *  #vpp jxt reverse 1.1.1.1:1276
  *  10.0.16.16
  * @cliexend
 ?*/
-VLIB_CLI_COMMAND (det44_reverse_command, static) = {
-    .path = "det44 reverse",
-    .short_help = "det44 reverse <addr>:<port>",
-    .function = det44_reverse_command_fn,
+VLIB_CLI_COMMAND (jxt_reverse_command, static) = {
+    .path = "jxt reverse",
+    .short_help = "jxt reverse <addr>:<port>",
+    .function = jxt_reverse_command_fn,
 };
 
 /*?
- * @cliexparf
- * @cliexstart{show det44 sessions}
- * Show DET44 sessions.
- * vpp# show det44 sessions
- * DET44 sessions:
+ * @cliexpar
+ * @cliexstart{show jxt sessions}
+ * Show jxt sessions.
+ * vpp# show jxt sessions
+ * jxt sessions:
  *   in 10.0.0.3:3005 out 1.1.1.2:1146 external host 172.16.1.2:3006 state:
 udp-active expire: 306
  *   in 10.0.0.3:3000 out 1.1.1.2:1141 external host 172.16.1.2:3001 state:
@@ -672,118 +738,118 @@ udp-active expire: 306
 udp-active expire: 306
  * @cliexend
 ?*/
-VLIB_CLI_COMMAND (det44_show_sessions_command, static) = {
-    .path = "show det44 sessions",
-    .short_help = "show det44 sessions",
-    .function = det44_show_sessions_command_fn,
+VLIB_CLI_COMMAND (jxt_show_sessions_command, static) = {
+    .path = "show jxt sessions",
+    .short_help = "show jxt sessions",
+    .function = jxt_show_sessions_command_fn,
 };
 
 /*?
  * @cliexpar
- * @cliexstart{det44 close session out}
+ * @cliexstart{jxt close session out}
  * Close session using outside ip address and port
  * and external ip address and port, use:
- *  vpp# det44 close session out 1.1.1.1:1276 2.2.2.2:2387
+ *  vpp# jxt close session out 1.1.1.1:1276 2.2.2.2:2387
  * @cliexend
 ?*/
-VLIB_CLI_COMMAND (det44_close_sesion_out_command, static) = {
-    .path = "det44 close session out",
-    .short_help = "det44 close session out "
+VLIB_CLI_COMMAND (jxt_close_sesion_out_command, static) = {
+    .path = "jxt close session out",
+    .short_help = "jxt close session out "
                   "<out_addr>:<out_port> <ext_addr>:<ext_port>",
-    .function = det44_close_session_out_fn,
+    .function = jxt_close_session_out_fn,
 };
 
 /*?
  * @cliexpar
- * @cliexstart{det44 deterministic close session in}
+ * @cliexstart{jxt deterministic close session in}
  * Close session using inside ip address and port
  * and external ip address and port, use:
- *  vpp# det44 close session in 3.3.3.3:3487 2.2.2.2:2387
+ *  vpp# jxt close session in 3.3.3.3:3487 2.2.2.2:2387
  * @cliexend
 ?*/
-VLIB_CLI_COMMAND (det44_close_session_in_command, static) = {
-    .path = "det44 close session in",
-    .short_help = "det44 close session in "
+VLIB_CLI_COMMAND (jxt_close_session_in_command, static) = {
+    .path = "jxt close session in",
+    .short_help = "jxt close session in "
                   "<in_addr>:<in_port> <ext_addr>:<ext_port>",
-    .function = det44_close_session_in_fn,
+    .function = jxt_close_session_in_fn,
 };
 
 /*?
  * @cliexpar
- * @cliexstart{set det44 timeout}
- * Set values of timeouts for DET44 sessions (in seconds), use:
- *  vpp# set det44 timeouts udp 120 tcp established 7500 tcp transitory 250
+ * @cliexstart{set jxt timeout}
+ * Set values of timeouts for jxt sessions (in seconds), use:
+ *  vpp# set jxt timeouts udp 120 tcp established 7500 tcp transitory 250
 icmp 90
  * To reset default values use:
- *  vpp# set det44 timeouts reset
+ *  vpp# set jxt timeouts reset
  * @cliexend
 ?*/
-VLIB_CLI_COMMAND (det44_set_timeouts_command, static) = {
-    .path = "set det44 timeouts",
-    .short_help = "set det44 timeouts <[udp <sec>] [tcp established <sec>] "
+VLIB_CLI_COMMAND (jxt_set_timeouts_command, static) = {
+    .path = "set jxt timeouts",
+    .short_help = "set jxt timeouts <[udp <sec>] [tcp established <sec>] "
                   "[tcp transitory <sec>] [icmp <sec>]|reset>",
-    .function = det44_set_timeouts_command_fn,
+    .function = jxt_set_timeouts_command_fn,
 };
 
 /*?
  * @cliexpar
- * @cliexstart{show det44 timeouts}
- * Show values of timeouts for DET44 sessions.
- * vpp# show det44 timeouts
+ * @cliexstart{show jxt timeouts}
+ * Show values of timeouts for jxt sessions.
+ * vpp# show jxt timeouts
  * udp timeout: 300sec
  * tcp-established timeout: 7440sec
  * tcp-transitory timeout: 240sec
  * icmp timeout: 60sec
  * @cliexend
 ?*/
-VLIB_CLI_COMMAND (det44_show_timeouts_command, static) = {
-    .path = "show det44 timeouts",
-    .short_help = "show det44 timeouts",
-    .function = det44_show_timeouts_command_fn,
+VLIB_CLI_COMMAND (jxt_show_timeouts_command, static) = {
+    .path = "show jxt timeouts",
+    .short_help = "show jxt timeouts",
+    .function = jxt_show_timeouts_command_fn,
 };
 
 /*?
  * @cliexpar
- * @cliexstart{det44 plugin}
- * Enable/disable DET44 plugin.
+ * @cliexstart{jxt plugin}
+ * Enable/disable jxt plugin.
  * @cliexend
 ?*/
-VLIB_CLI_COMMAND (det44_plugin_enable_disable_command, static) = {
-    .path = "det44 plugin",
-    .short_help = "det44 plugin <enable [inside vrf] [outside vrf]|disable>",
-    .function = det44_plugin_enable_disable_command_fn,
+VLIB_CLI_COMMAND (jxt_plugin_enable_disable_command, static) = {
+    .path = "jxt plugin",
+    .short_help = "jxt plugin <enable [inside vrf] [outside vrf]|disable>",
+    .function = jxt_plugin_enable_disable_command_fn,
 };
 
 /*?
  * @cliexpar
- * @cliexstart{set interface det44}
- * Enable/disable DET44 feature on the interface.
- * To enable DET44 feature with local network interface use:
- *  vpp# set interface det44 inside GigabitEthernet0/8/0
- * To enable DET44 feature with external network interface use:
- *  vpp# set interface det44 outside GigabitEthernet0/a/0
+ * @cliexstart{set interface jxt}
+ * Enable/disable jxt feature on the interface.
+ * To enable jxt feature with local network interface use:
+ *  vpp# set interface jxt inside GigabitEthernet0/8/0
+ * To enable jxt feature with external network interface use:
+ *  vpp# set interface jxt outside GigabitEthernet0/a/0
  * @cliexend
 ?*/
-VLIB_CLI_COMMAND (det44_feature_command, static) = {
-    .path = "set interface det44",
-    .short_help = "set interface det44 inside <intfc> outside <intfc> [del]",
-    .function = det44_feature_command_fn,
+VLIB_CLI_COMMAND (jxt_feature_command, static) = {
+    .path = "set interface jxt",
+    .short_help = "set interface jxt inside <intfc> outside <intfc> [del]",
+    .function = jxt_feature_command_fn,
 };
 
 /*?
  * @cliexpar
- * @cliexstart{show det44 interfaces}
- * Show interfaces with DET44 feature.
- * vpp# show det44 interfaces
- * DET44 interfaces:
- *  GigabitEthernet0/8/0 in
+ * @cliexstart{show jxt interfaces}
+ * Show interfaces with jxt feature.
+ * vpp# show jxt interfaces
+ * jxt interfaces:
+ *  GigabitEthernet0/8/0 in 
  *  GigabitEthernet0/a/0 out
  * @cliexend
 ?*/
-VLIB_CLI_COMMAND (det44_show_interfaces_command, static) = {
-    .path = "show det44 interfaces",
-    .short_help = "show det44 interfaces",
-    .function = det44_show_interfaces_command_fn,
+VLIB_CLI_COMMAND (jxt_show_interfaces_command, static) = {
+    .path = "show jxt interfaces",
+    .short_help = "show jxt interfaces",
+    .function = jxt_show_interfaces_command_fn,
 };
 /* *INDENT-ON* */
 

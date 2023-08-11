@@ -25,29 +25,35 @@
 #include <vppinfra/error.h>
 #include <vppinfra/elog.h>
 
-#include <nat/det44/det44.h>
-#include <nat/det44/det44_inlines.h>
+#include <plugins/jxt/jxt.h>
+#include <plugins/jxt/jxt_inlines.h>
 
 #include <nat/lib/lib.h>
 #include <nat/lib/inlines.h>
 #include <nat/lib/nat_inlines.h>
 
-typedef enum // 枚举类型, 表示不同的下一步处理方式
+///////////////////////////////////
+#include <vppinfra/bihash_8_8.h>
+#include <vppinfra/bihash_16_8.h>
+#include <stdlib.h>
+//////////////////////////////////
+
+typedef enum              // 枚举类型, 表示不同的下一步处理方式
 {
-  DET44_IN2OUT_NEXT_LOOKUP, // 表示需要进行下一步的查找操作。
-  DET44_IN2OUT_NEXT_DROP,   // 表示需要丢弃该数据包
-  DET44_IN2OUT_NEXT_ICMP_ERROR, // 表示需要发送ICMP错误消息
-  DET44_IN2OUT_N_NEXT,          // 表示该枚举类型的成员数量
-} det44_in2out_next_t;
+  jxt_IN2OUT_NEXT_LOOKUP, // 表示需要进行下一步的查找操作。
+  jxt_IN2OUT_NEXT_DROP,   // 表示需要丢弃该数据包
+  jxt_IN2OUT_NEXT_ICMP_ERROR, // 表示需要发送ICMP错误消息
+  jxt_IN2OUT_N_NEXT,          // 表示该枚举类型的成员数量
+} jxt_in2out_next_t;
 
 typedef struct       // 存储特定的跟踪信息
 {
   u32 sw_if_index;   // 用于存储软件接口索引
   u32 next_index;    // 用于存储下一步处理方式的索引
   u32 session_index; // 用于存储会话索引
-} det44_in2out_trace_t;
+} jxt_in2out_trace_t;
 
-#define foreach_det44_in2out_error                 \
+#define foreach_jxt_in2out_error                   \
   _ (UNSUPPORTED_PROTOCOL, "Unsupported protocol") \
   _ (NO_TRANSLATION, "No translation")             \
   _ (BAD_ICMP_TYPE, "unsupported ICMP type")       \
@@ -56,27 +62,27 @@ typedef struct       // 存储特定的跟踪信息
 
 typedef enum // 用于表示不同的错误类型
 {
-#define _(sym, str) DET44_IN2OUT_ERROR_##sym,
-  foreach_det44_in2out_error
+#define _(sym, str) jxt_IN2OUT_ERROR_##sym,
+  foreach_jxt_in2out_error
 #undef _
-      DET44_IN2OUT_N_ERROR,
-} det44_in2out_error_t;
+      jxt_IN2OUT_N_ERROR,
+} jxt_in2out_error_t;
 
-static char *det44_in2out_error_strings[] =
+static char *jxt_in2out_error_strings[] =
     { // 用于存储与错误枚举成员对应的字符串
 #define _(sym, string) string,
-        foreach_det44_in2out_error
+        foreach_jxt_in2out_error
 #undef _
 };
 
-// 格式化打印(det44_in2out_trace_t)结构体的跟踪信息
-static u8 *format_det44_in2out_trace (u8 *s, va_list *args)
+// 格式化打印(jxt_in2out_trace_t)结构体的跟踪信息
+static u8 *format_jxt_in2out_trace (u8 *s, va_list *args)
 {
   CLIB_UNUSED (vlib_main_t * vm) = va_arg (*args, vlib_main_t *);
   CLIB_UNUSED (vlib_node_t * node) = va_arg (*args, vlib_node_t *);
-  det44_in2out_trace_t *t = va_arg (*args, det44_in2out_trace_t *);
+  jxt_in2out_trace_t *t = va_arg (*args, jxt_in2out_trace_t *);
 
-  s = format (s, "DET44_IN2OUT: sw_if_index %d, next index %d, session %d",
+  s = format (s, "jxt_IN2OUT: sw_if_index %d, next index %d, session %d",
               t->sw_if_index, t->next_index, t->session_index);
 
   return s;
@@ -103,7 +109,7 @@ static u8 *format_det44_in2out_trace (u8 *s, va_list *args)
 而是根据数据包的内容和内部状态信息查找相应的目的地址和端口的转换规则（destination
 NAT映射）
 // 这个函数主要用于查找目的地址和端口的转换规则，属于数据包转换的前置处理步骤
-这个函数根据传入的ICMP数据包的相关信息，查找或创建相应的det44映射和会话，
+这个函数根据传入的ICMP数据包的相关信息，查找或创建相应的jxt映射和会话，
 并返回转换后的地址、端口以及处理该数据包的下一步操作。
 */
 u32 icmp_match_in2out_det (vlib_node_runtime_t *node, u32 thread_index,
@@ -112,7 +118,7 @@ u32 icmp_match_in2out_det (vlib_node_runtime_t *node, u32 thread_index,
                            nat_protocol_t *proto, void *d, void *e,
                            u8 *dont_translate)
 {
-  det44_main_t *dm = &det44_main;     // 用于存储det44的主要配置信息
+  jxt_main_t *dm = &jxt_main;         // 用于存储jxt的主要配置信息
   vlib_main_t *vm = vlib_get_main (); // 用于获取当前时间等操作
   icmp46_header_t *icmp0;             // 用于指向ICMP头部
   u32 sw_if_index0;                   // 用于存储接口索引
@@ -166,8 +172,8 @@ u32 icmp_match_in2out_det (vlib_node_runtime_t *node, u32 thread_index,
           in_port = ((tcp_udp_header_t *)l4_header)->dst_port;
           break;
         default:
-          b0->error = node->errors[DET44_IN2OUT_ERROR_UNSUPPORTED_PROTOCOL];
-          next0 = DET44_IN2OUT_NEXT_DROP;
+          b0->error = node->errors[jxt_IN2OUT_ERROR_UNSUPPORTED_PROTOCOL];
+          next0 = jxt_IN2OUT_NEXT_DROP;
           goto out;
         }
     }
@@ -177,14 +183,14 @@ u32 icmp_match_in2out_det (vlib_node_runtime_t *node, u32 thread_index,
                  // NAT映射
   if (PREDICT_FALSE (!mp0)) // 如果没找到
     {
-      if (PREDICT_FALSE (det44_translate (node, sw_if_index0, ip0,
-                                          IP_PROTOCOL_ICMP, rx_fib_index0)))
+      if (PREDICT_FALSE (jxt_translate (node, sw_if_index0, ip0,
+                                        IP_PROTOCOL_ICMP, rx_fib_index0)))
         {
           *dont_translate = 1;
           goto out;
         }
-      next0 = DET44_IN2OUT_NEXT_DROP;
-      b0->error = node->errors[DET44_IN2OUT_ERROR_NO_TRANSLATION];
+      next0 = jxt_IN2OUT_NEXT_DROP;
+      b0->error = node->errors[jxt_IN2OUT_ERROR_NO_TRANSLATION];
       goto out;
     }
 
@@ -197,16 +203,16 @@ u32 icmp_match_in2out_det (vlib_node_runtime_t *node, u32 thread_index,
   ses0 = snat_det_find_ses_by_in (mp0, &in_addr, in_port, key0);
   if (PREDICT_FALSE (!ses0))
     {
-      if (PREDICT_FALSE (det44_translate (node, sw_if_index0, ip0,
-                                          IP_PROTOCOL_ICMP, rx_fib_index0)))
+      if (PREDICT_FALSE (jxt_translate (node, sw_if_index0, ip0,
+                                        IP_PROTOCOL_ICMP, rx_fib_index0)))
         {
           *dont_translate = 1;
           goto out;
         }
       if (icmp0->type != ICMP4_echo_request)
         {
-          b0->error = node->errors[DET44_IN2OUT_ERROR_BAD_ICMP_TYPE];
-          next0 = DET44_IN2OUT_NEXT_DROP;
+          b0->error = node->errors[jxt_IN2OUT_ERROR_BAD_ICMP_TYPE];
+          next0 = jxt_IN2OUT_NEXT_DROP;
           goto out;
         }
       for (i0 = 0; i0 < mp0->ports_per_host; i0++)
@@ -224,8 +230,8 @@ u32 icmp_match_in2out_det (vlib_node_runtime_t *node, u32 thread_index,
         }
       if (PREDICT_FALSE (!ses0))
         {
-          next0 = DET44_IN2OUT_NEXT_DROP;
-          b0->error = node->errors[DET44_IN2OUT_ERROR_OUT_OF_PORTS];
+          next0 = jxt_IN2OUT_NEXT_DROP;
+          b0->error = node->errors[jxt_IN2OUT_ERROR_OUT_OF_PORTS];
           goto out;
         }
     }
@@ -235,14 +241,14 @@ u32 icmp_match_in2out_det (vlib_node_runtime_t *node, u32 thread_index,
                      !icmp_type_is_error_message (
                          vnet_buffer (b0)->ip.reass.icmp_type_or_tcp_flags)))
     {
-      b0->error = node->errors[DET44_IN2OUT_ERROR_BAD_ICMP_TYPE];
-      next0 = DET44_IN2OUT_NEXT_DROP;
+      b0->error = node->errors[jxt_IN2OUT_ERROR_BAD_ICMP_TYPE];
+      next0 = jxt_IN2OUT_NEXT_DROP;
       goto out;
     }
 
   u32 now = (u32)vlib_time_now (vm);
 
-  ses0->state = DET44_SESSION_ICMP_ACTIVE;
+  ses0->state = jxt_SESSION_ICMP_ACTIVE;
   ses0->expire = now + dm->timeouts.icmp;
 
 out:
@@ -262,15 +268,15 @@ out:
 #endif
 
 // icmp_match_in2out_det 函数是用于查找 ICMP 数据包的目的地址和端口的转换规则
-// det44_icmp_in2out
+// jxt_icmp_in2out
 // 函数则是用于具体的数据包处理和转换,是处理具体数据包的逻辑实现，属于数据包转换的核心部分。
 // 它接收从内部网络传入的 ICMP 数据包，并对其进行转换，使其源 IPv4
 // 地址和端口从内部网络转换为外部网络对应的地址和端口。
 #ifndef CLIB_MARCH_VARIANT
-u32 det44_icmp_in2out (vlib_buffer_t *b0, ip4_header_t *ip0,
-                       icmp46_header_t *icmp0, u32 sw_if_index0,
-                       u32 rx_fib_index0, vlib_node_runtime_t *node, u32 next0,
-                       u32 thread_index, void *d, void *e)
+u32 jxt_icmp_in2out (vlib_buffer_t *b0, ip4_header_t *ip0,
+                     icmp46_header_t *icmp0, u32 sw_if_index0,
+                     u32 rx_fib_index0, vlib_node_runtime_t *node, u32 next0,
+                     u32 thread_index, void *d, void *e)
 {
   vlib_main_t *vm = vlib_get_main ();
   u16 old_id0, new_id0, port, checksum0, old_checksum0, new_checksum0;
@@ -290,7 +296,7 @@ u32 det44_icmp_in2out (vlib_buffer_t *b0, ip4_header_t *ip0,
                              &fib_index, &protocol, d, e, &dont_translate);
   if (next0_tmp != ~0)
     next0 = next0_tmp;
-  if (next0 == DET44_IN2OUT_NEXT_DROP || dont_translate)
+  if (next0 == jxt_IN2OUT_NEXT_DROP || dont_translate)
     goto out;
 
   if (PREDICT_TRUE (!ip4_is_fragment (ip0)))
@@ -301,7 +307,7 @@ u32 det44_icmp_in2out (vlib_buffer_t *b0, ip4_header_t *ip0,
       checksum0 = ~ip_csum_fold (sum0);
       if (PREDICT_FALSE (checksum0 != 0 && checksum0 != 0xffff))
         {
-          next0 = DET44_IN2OUT_NEXT_DROP;
+          next0 = jxt_IN2OUT_NEXT_DROP;
           goto out;
         }
     }
@@ -341,7 +347,7 @@ u32 det44_icmp_in2out (vlib_buffer_t *b0, ip4_header_t *ip0,
 
           if (!ip4_header_checksum_is_valid (inner_ip0))
             {
-              next0 = DET44_IN2OUT_NEXT_DROP;
+              next0 = jxt_IN2OUT_NEXT_DROP;
               goto out;
             }
 
@@ -405,26 +411,56 @@ out:
 }
 #endif
 
-/*******************************************************/
-/*********************** my modify begin *******************/
 
-// 假设有两个外部端口范围
-#define PORT_RANGE_1_START 1024
-#define PORT_RANGE_1_END 3071
-#define PORT_RANGE_2_START 3072
-#define PORT_RANGE_2_END 5119
-#define PORT_RANGE_SIZE 2048
 
-/******************** my modify end *************************/
-/***********************************************************/
+static_always_inline my_sess_t *
+jxt_ses_create (jxt_main_t *dm, u32 thread_index, ip4_address_t *in_addr,
+                u16 *last_index, u16 *ses_index, my_user_t *user0,
+                u16 in_port0, u32 now)
+{
+  // 获取到当前要遍历的会话索引
+  *ses_index = (*last_index + 1) % MY_MAX_SESS_PER_USER;
+  u16 i0;
+  for (i0 = 0; i0 < MY_MAX_SESS_PER_USER; i0++)
+    {
+      *ses_index = (*ses_index + i0) % MY_MAX_SESS_PER_USER;
+      my_sess_t *ses0 = &user0->my_sess[*ses_index];
+      if (ses0->in_port == 0 || ses0->expire <= now)
+        {
+          // 将原会话in_port对应的会话索引 置为非法值
+          user0->my_sess_index_by_in[ses0->in_port] = (u16)~0;
+          // 更新 my_sess[i0] 的 in_port 和 expire
+          ses0->in_port = in_port0;
+          ses0->out_port = *ses_index + user0->lo_port;
+          ses0->state = jxt_SESSION_UNKNOWN;
+          ses0->expire = now + dm->timeouts.tcp.transitory;
+          *last_index = *ses_index;
+          clib_atomic_add_fetch (&user0->ses_num, 1);
+          return ses0;
+        }
+    }
+  // nat_ipfix_logging_max_entries_per_user (thread_index, jxt_SES_PER_USER,
+  //                                         in_addr->as_u32);
+  // 没找到合适的ses
+  return 0;
+}
 
-VLIB_NODE_FN (det44_in2out_node)
+static_always_inline void jxt_ses_close (my_user_t *user0, my_sess_t *ses0)
+{
+  if (clib_atomic_bool_cmp_and_swap (&ses0->in_port, ses0->in_port, 0))
+    {
+      ses0 = 0;
+      clib_atomic_add_fetch (&user0->ses_num, -1);
+    }
+}
+
+VLIB_NODE_FN (jxt_in2out_node)
 (vlib_main_t *vm, vlib_node_runtime_t *node,
  vlib_frame_t *frame) // frame: 包含从前一个节点传递的数据包信息的帧结构指针。
 {
   u32 n_left_from, *from;
   u32 pkts_processed = 0;
-  det44_main_t *dm = &det44_main;
+  jxt_main_t *dm = &jxt_main;
   u32 now = (u32)vlib_time_now (vm);
   u32 thread_index =
       vm->thread_index; // 获取当前线程的索引，用于多线程环境下的数据包处理。
@@ -438,6 +474,12 @@ VLIB_NODE_FN (det44_in2out_node)
       *next = nexts; // 定义下一跳数组用于存储数据包的下一跳索引。
   vlib_get_buffers (vm, from, b, n_left_from);
 
+  /*********************** my modify begin *******************/
+  snat_det_map_t *mp0;
+  my_user_t *user0;
+  my_sess_t *ses0 = 0;
+  /******************** my modify end *************************/
+
   while (n_left_from > 0) // 最后剩下一个，就处理一个
     {
       vlib_buffer_t *b0;  // 指向当前正在处理的数据包的缓冲区
@@ -445,20 +487,19 @@ VLIB_NODE_FN (det44_in2out_node)
       u32 sw_if_index0;
       ip4_header_t *ip0;
       ip_csum_t sum0;
-      ip4_address_t new_addr0, old_addr0;
-      u16 old_port0, new_port0, lo_port0, i0;
+
       udp_header_t *udp0;
       tcp_header_t *tcp0;
       u32 proto0;
-      snat_det_out_key_t key0;
-      snat_det_session_t *ses0 = 0;
+      // snat_det_out_key_t key0;
+
       u32 rx_fib_index0;
       icmp46_header_t *icmp0;
 
       b0 = *b;
       b++;
-      // 当前数据包处理完成后的下一步操作，初始值为DET44_IN2OUT_NEXT_LOOKUP。
-      next0 = DET44_IN2OUT_NEXT_LOOKUP;
+      // 当前数据包处理完成后的下一步操作，初始值为jxt_IN2OUT_NEXT_LOOKUP。
+      next0 = jxt_IN2OUT_NEXT_LOOKUP;
 
       ip0 = vlib_buffer_get_current (b0);
       udp0 = ip4_next_header (ip0);
@@ -466,42 +507,10 @@ VLIB_NODE_FN (det44_in2out_node)
 
       sw_if_index0 = vnet_buffer (b0)->sw_if_index[VLIB_RX];
 
-      /*******************************************************/
       /*********************** my modify begin *******************/
-      // 生成映射表
-      // dm->det_maps[0]->in_addr.as_u32 = 192.168.1.0   10.2.1.0
-      // dm->det_maps[1]->in_addr.as_u32 = 192.168.2.0   10.2.2.0
-      // ...
-      // dm->det_maps[64]->in_addr.as_u32 = 192.168.64.0   10.2.64.0
-      ip4_address_t in_addr, out_addr;
-      for (int i = 0; i < MY_MAX_DET_MAPS; ++i)
-        {
-          dm->det_maps[i].in_plan = MY_PLEN;
-          dm->det_maps[i].out_plan = MY_PLEN;
-          // 192.168.1.0
-          dm->det_maps[i].in_addr.as_u32 = clib_host_to_net_u32 (0xC0A80100) +
-                                           clib_host_to_net_u32 (i << 8);
-          // 10.2.1.0
-          dm->det_maps[i].out_addr.as_u32 = clib_host_to_net_u32 (0x0A020100) +
-                                            clib_host_to_net_u32 (i << 8);
-        }
-
-      // 创建哈希表
-      clib_bihash_8_8_init (&dm->translation_table, "det44_translation_table",
-                            MY_MAX_DET_MAPS, 0);
-      // 初始化哈希表
-      for (int i = 0; i < MY_MAX_DET_MAPS; i++)
-        {
-          // 将每个映射表中的in_addr作为键，映射表的索引作为值，插入哈希表
-          clib_bihash_kv_8_8_t kv;
-          kv.key[0] = dm->det_maps[i].in_addr.as_u32;
-          kv.key[1] = 0;
-          kv.value = i;
-          clib_bihash_add_del_8_8 (&det44_main.translation_table, &kv, 1);
-        }
-
+      ip4_address_t new_addr0 = {0}, old_addr0;
+      u16 old_port0, new_port0, in_port0, ses_index, user_index, i0;
       /******************** my modify end *************************/
-      /***********************************************************/
 
       // 检查IPv4数据包的TTL（Time To Live）字段是否为1
       if (PREDICT_FALSE (ip0->ttl == 1))
@@ -510,155 +519,178 @@ VLIB_NODE_FN (det44_in2out_node)
           icmp4_error_set_vnet_buffer (
               b0, ICMP4_time_exceeded,
               ICMP4_time_exceeded_ttl_exceeded_in_transit, 0);
-          next0 = DET44_IN2OUT_NEXT_ICMP_ERROR;
+          next0 = jxt_IN2OUT_NEXT_ICMP_ERROR;
           goto trace00;
         }
 
       proto0 = ip_proto_to_nat_proto (ip0->protocol);
 
-      // 如果是 icmp ，交给det44_icmp_in2out 函数处理
+      // 如果是 icmp ，交给jxt_icmp_in2out 函数处理
       if (PREDICT_FALSE (proto0 == NAT_PROTOCOL_ICMP))
         {
           rx_fib_index0 =
               ip4_fib_table_get_index_for_sw_if_index (sw_if_index0);
           icmp0 = (icmp46_header_t *)udp0;
 
-          next0 =
-              det44_icmp_in2out (b0, ip0, icmp0, sw_if_index0, rx_fib_index0,
-                                 node, next0, thread_index, &ses0, &mp0);
+          next0 = jxt_icmp_in2out (b0, ip0, icmp0, sw_if_index0, rx_fib_index0,
+                                   node, next0, thread_index, &ses0, &mp0);
           goto trace00;
         }
 
       /***********************************************************/
       /*********************** my modify begin *******************/
-      // 根据 源ip地址 查找映射表
+      // 根据 in_addr 查找映射表
       clib_bihash_kv_8_8_t kv;
-      kv.key[0] = ip0->src_address.as_u32 & ip4_main.fib_masks[MY_PLEN];
-      kv.key[1] = 0; // IPv4地址，kv.key[1]应为0
-      clib_bihash_search_8_8 (&det44_main.translation_table, &kv);
-      if (PREDICT_FALSE (kv.value >= MY_MAX_DET_MAPS))
+      clib_bihash_kv_8_8_t value;
+      kv.key = (u64)ip0->src_address.as_u32 << 32;
+      kv.value = 0;
+      value.key = 0;
+      value.value = 0;
+      int rv = clib_bihash_search_8_8 (&jxt_main.in_hash_table, &kv, &value);
+      // if (rv == 0) {
+      //     // 键存在于哈希表中，输出键值对的内容
+      //     vlib_cli_output (vm, "键: %llu, 值: %u\n", kv.key, value.value);
+      // } else {
+      //     // 键不存在于哈希表中，输出未找到的信息
+      //     vlib_cli_output (vm, "未找到键: %llu\n", kv.key);
+      // }
+
+
+      // 查找失败，说明是新 in_addr ，添加哈希：
+      // 从上一次创建的用户索引开始遍历，last_user_index，
+      // 遍历用户数据结构my_user，找到一个 ses_num = 0 的my_user填入in_addr。
+      if (PREDICT_FALSE (rv != 0))
         {
-          // 没找到对应的映射表，处理错误逻辑
-          det44_log_info ("no match mapping for internal host ip %U",
-                          format_ip4_address, &ip0->src_address);
-          next0 = DET44_IN2OUT_NEXT_DROP;
-          b0->error = node->errors[DET44_IN2OUT_ERROR_NO_TRANSLATION];
-          goto trace00;
-        }
-
-      snat_det_map_t *mp0 = dm->det_maps[kv.value];
-
-      // 查找映射的外部地址相应的会话表
-      // 计算偏移量
-      // ip0->src_address.as_u8 为 192.168.10.0 - 192.168.10.127
-      u32 addr_offset = (ip0->src_address.as_u8[3] / 2);
-      if (addr_offset >= 64)
-        {
-          det44_log_info ("invalid internal host ip %U", format_ip4_address,
-                          &ip0->src_address);
-          next0 = DET44_IN2OUT_NEXT_DROP;
-          b0->error = node->errors[DET44_IN2OUT_ERROR_NO_TRANSLATION];
-          goto trace00;
-        }
-
-      snat_det_session_table_t *table0 = mp0->sessions_tables[addr_offset];
-
-      // 将外部起始地址与偏移量相加得到映射到的外部地址
-      ip4_address_t mapped_addr;
-      mapped_addr.as_u32 = clib_host_to_net_u32 (
-          clib_net_to_host_u32 (mp0->out_addr.as_u32) + addr_offset);
-      // 是这个外部地址下的第一段或第二段端口范围
-      u32 port_range_index = (ip0->src_address.as_u8[3] % 2);
-      u16 port_range_start, port_range_end;
-      if (port_range_index == 0)
-        {
-          port_range_start = PORT_RANGE_1_START;
-          port_range_end = PORT_RANGE_1_END;
-        }
-      else
-        {
-          port_range_start = PORT_RANGE_2_START;
-          port_range_end = PORT_RANGE_2_END;
-        }
-
-      // 计算要映射的外部端口，临时端口
-      u16 mapped_port = port_range_start;
-
-      // 根据源ip，目标ip和端口查找会话
-      key0.ext_host_addr = ip0->dst_address; // 目标ip地址
-      key0.ext_host_port = tcp0->dst;        // 目标端口
-
-      // 找到映射的外部地址对应的会话表
-      {
-        for (i0 = 0; i0 < MY_SESSIONS_PER_EXTERNAL_ADDR / 2; i0++)
-        {
-          snat_det_session_t *ses0 = table0->sessions[i0 + mapped_port];
-          if (s0->expire <= now)
+          user_index = (dm->last_user_index + 1) % MY_USERS;
+          for (i0 = 0; i0 < MY_USERS; i0++)
             {
-              continue; // 跳过已超时的会话
-            }
-          if (s0->in_port == udp0->src_port &&
-              s0->out.ext_host_addr.as_u32 == mapped_addr.as_u32 &&
-              s0->out.ext_host_port == mapped_port)
-            {
-              goto done;
-            }
-        }
-        ses0 = 0;
-      }
-      done:
-
-
-
-      /******************** my modify end *************************/
-      /***********************************************************/
-
-      // 没找到，则创建会话
-      if (PREDICT_FALSE (!ses0))
-        {
-          // 循环会尝试不同的目标端口，直到找到一个可用的目标端口
-          for (i0 = 0; i0 < MY_SESSIONS_PER_EXTERNAL_ADDR / 2; i0++)
-            {
-              snat_det_session_t *s0 = table0->sessions[i0 + mapped_port];
-
-              // 表示这个端口还没被用过
-              if (s0->in_port == 0)
+              user_index = (user_index + i0) % MY_USERS;
+              user0 = &dm->my_users[user_index];
+              if (user0->in_addr.as_u32 == 0 || user0->ses_num == 0)
                 {
-                  if (clib_atomic_bool_cmp_and_swap (&s0->in_port, 0,
-                                                     udp0->src_port))
-                    {
-                      s0->out.ext_host_addr = mapped_addr;
-                      s0->out.ext_host_port = mapped_port;
-                      s0->state = DET44_SESSION_UNKNOWN;
-                      s0->expire = now + dm->timeouts.tcp_transitory;
-                      clib_atomic_add_fetch (&table0->ses_num, 1);
-                      break;
-                    }
+                  // 添加哈希之前检查是否还能添加
+                  if(dm->in_hash_items_num < MY_USERS)
+                  {
+                    // 添加in哈希
+                    kv.key = (u64)ip0->src_address.as_u32 << 32;
+                    kv.value = user_index;
+                    clib_bihash_add_del_8_8 (&jxt_main.in_hash_table, &kv, 1);
+                    // 哈希表条目数量加一
+                    dm->in_hash_items_num ++;
+                  }
+                  else // 哈希表已满，删除找到的合适的用户原本in_addr对应的哈希
+                  {
+                    // 原本用户结构中存的 旧in_addr
+                    kv.key = (u64)user0->in_addr.as_u32 << 32;
+                    kv.value = user_index;
+                    clib_bihash_add_del_8_8 (&jxt_main.in_hash_table, &kv, 0);
+
+                    // 添加新in_addr对应的哈希
+                    kv.key = (u64)ip0->src_address.as_u32 << 32;
+                    kv.value = user_index;
+                    clib_bihash_add_del_8_8 (&jxt_main.in_hash_table, &kv, 1);
+                  }
+                  // 初始化成员
+                  user0->in_addr = ip0->src_address;
+                  user0->ses_num = 0;
+                  // 更新 上一次创建用户的索引
+                  dm->last_user_index = user_index; 
+                  break;
+                }
+                else // 没找到合适的用户结构
+                {
+                  jxt_log_info ("has reached the maximum number of users, internal host ip: %U",
+                  format_ip4_address, &ip0->src_address);
+                  next0 = jxt_IN2OUT_NEXT_DROP;
+                  b0->error = node->errors[jxt_IN2OUT_ERROR_NO_TRANSLATION];
+                  goto trace00;
                 }
             }
+        }
+        else // 哈希表查找成功
+        {
+          // 拿到该 in_addr 的数据结构
+          user0 = &dm->my_users[value.value];
+        }
 
-          // Det44会话数量达到上限，将数据包丢弃，并发送ICMP错误报文，通知发送者无法建立新的连接
-          if (PREDICT_FALSE (!ses0))
+      new_addr0 = user0->out_addr;
+      in_port0 = udp0->src_port;
+      // ses_index 合法范围为 0 - 2047
+      // 初始值为65535
+      ses_index = user0->my_sess_index_by_in[in_port0];
+
+      // 索引合法，即0 - 2047之间
+      if (PREDICT_TRUE (ses_index != (u16)~0))
+        {
+          ses0 = &user0->my_sess[ses_index];
+
+          // 会话未使用或会话超时，直接 创建新的会话
+          if (ses0->in_port == 0 || ses0->expire <= now)
             {
-              /* too many sessions for user, send ICMP error packet */
-              vnet_buffer (b0)->sw_if_index[VLIB_TX] = (u32)~0;
-              icmp4_error_set_vnet_buffer (
-                  b0, ICMP4_destination_unreachable,
-                  ICMP4_destination_unreachable_destination_unreachable_host,
-                  0);
-              next0 = DET44_IN2OUT_NEXT_ICMP_ERROR;
-              goto trace00;
+              user0->last_ses_index = ses_index - 1;
+              ses0 = jxt_ses_create (dm, thread_index, &ip0->src_address,
+                                     &user0->last_ses_index, &ses_index, user0, in_port0, now);
+            }
+          else
+            {
+              if (ses0->in_port != in_port0)
+                {
+                  // 会话被其他端口占用，且未超时
+                  // 遍历下一个会话，直到找到一个会话未使用或超时，创建会话
+                  ses0 = jxt_ses_create (dm, thread_index, &ip0->src_address,
+                                         &user0->last_ses_index, &ses_index, user0,
+                                         in_port0, now);
+                }
+              else
+              {
+                // 端口相等，且未超时，不作其他操作
+                goto done;
+              }
             }
         }
+      // 索引不合法
+      else
+        {
+          // 遍历下一个会话，直到找到一个会话未使用或超时，创建会话
+          ses0 = jxt_ses_create (dm, thread_index, &ip0->src_address,
+                                 &user0->last_ses_index, &ses_index, user0, in_port0, now);
+        }
+      // 
+      done:
+        // 更新这个 in_addr 下这个in_port查到的会话索引值 
+        user0->my_sess_index_by_in[in_port0] = ses_index;
+
+
+
+      // jxt会话数量达到上限，将数据包丢弃，并发送ICMP错误报文，通知发送者无法建立新的连接
+      if (PREDICT_FALSE (!ses0))
+        {
+          /* too many sessions for user, send ICMP error packet */
+          vnet_buffer (b0)->sw_if_index[VLIB_TX] = (u32)~0;
+          icmp4_error_set_vnet_buffer (
+              b0, ICMP4_destination_unreachable,
+              ICMP4_destination_unreachable_destination_unreachable_host, 0);
+          next0 = jxt_IN2OUT_NEXT_ICMP_ERROR;
+          goto trace00;
+        }
+
+      // 若找到，更新out_port
+      new_port0 = user0->lo_port + ses_index;
+
       // 如果能查到会话，则直接使用查到的会话中的地址和端口号，而不是
       // snat_det_forward 转换后的地址和端口号
       old_port0 = udp0->src_port;
-      udp0->src_port = new_port0 = ses0->out.out_port;
+      udp0->src_port = new_port0;
 
       old_addr0.as_u32 = ip0->src_address.as_u32;
       ip0->src_address.as_u32 = new_addr0.as_u32;
 
-      // 将数据包的输出接口设置为Det44会话中指定的外部FIB表的索引值。这是为了确保转换后的数据包能够正确地路由出去。
+      //  vlib_cli_output (vm, "sessions tables index: %d, in %U/%d out %U/%d
+      //  dst %U/%d\n", value.value, format_ip4_address,
+      //     &old_addr0, old_port0, format_ip4_address, &new_addr0, new_port0,
+      //     format_ip4_address, &ip0->dst_address, tcp0->dst);
+
+      // 将数据包的输出接口设置为jxt会话中指定的外部FIB表的索引值。这是为了确保转换后的数据包能够正确地路由出去。
       vnet_buffer (b0)->sw_if_index[VLIB_TX] = dm->outside_fib_index;
 
       // 重新计算校验和
@@ -672,21 +704,22 @@ VLIB_NODE_FN (det44_in2out_node)
       if (PREDICT_TRUE (proto0 == NAT_PROTOCOL_TCP))
         {
           if (tcp0->flags & TCP_FLAG_SYN)
-            ses0->state = DET44_SESSION_TCP_SYN_SENT;
+            ses0->state = jxt_SESSION_TCP_SYN_SENT;
           else if (tcp0->flags & TCP_FLAG_ACK &&
-                   ses0->state == DET44_SESSION_TCP_SYN_SENT)
-            ses0->state = DET44_SESSION_TCP_ESTABLISHED;
+                   ses0->state == jxt_SESSION_TCP_SYN_SENT)
+            ses0->state = jxt_SESSION_TCP_ESTABLISHED;
           else if (tcp0->flags & TCP_FLAG_FIN &&
-                   ses0->state == DET44_SESSION_TCP_ESTABLISHED)
-            ses0->state = DET44_SESSION_TCP_FIN_WAIT;
+                   ses0->state == jxt_SESSION_TCP_ESTABLISHED)
+            ses0->state = jxt_SESSION_TCP_FIN_WAIT;
           else if (tcp0->flags & TCP_FLAG_ACK &&
-                   ses0->state == DET44_SESSION_TCP_FIN_WAIT)
-            snat_det_ses_close (mp0, ses0);
+                   ses0->state == jxt_SESSION_TCP_FIN_WAIT)
+            jxt_ses_close (user0, ses0);
           else if (tcp0->flags & TCP_FLAG_FIN &&
-                   ses0->state == DET44_SESSION_TCP_CLOSE_WAIT)
-            ses0->state = DET44_SESSION_TCP_LAST_ACK;
-          else if (tcp0->flags == 0 && ses0->state == DET44_SESSION_UNKNOWN)
-            ses0->state = DET44_SESSION_TCP_ESTABLISHED;
+                   ses0->state == jxt_SESSION_TCP_CLOSE_WAIT)
+            ses0->state = jxt_SESSION_TCP_LAST_ACK;
+          else if (tcp0->flags == 0 && ses0->state == jxt_SESSION_UNKNOWN)
+            ses0->state = jxt_SESSION_TCP_ESTABLISHED;
+
 
           sum0 = tcp0->checksum;
           sum0 =
@@ -700,7 +733,7 @@ VLIB_NODE_FN (det44_in2out_node)
         }
       else // 如果是UDP
         {
-          ses0->state = DET44_SESSION_UDP_ACTIVE;
+          ses0->state = jxt_SESSION_UDP_ACTIVE;
 
           if (PREDICT_FALSE (udp0->checksum))
             {
@@ -718,16 +751,16 @@ VLIB_NODE_FN (det44_in2out_node)
       // 更新会话的过期时间
       switch (ses0->state)
         {
-        case DET44_SESSION_UDP_ACTIVE:
+        case jxt_SESSION_UDP_ACTIVE:
           ses0->expire = now + dm->timeouts.udp;
           break;
-        case DET44_SESSION_TCP_SYN_SENT:
-        case DET44_SESSION_TCP_FIN_WAIT:
-        case DET44_SESSION_TCP_CLOSE_WAIT:
-        case DET44_SESSION_TCP_LAST_ACK:
+        case jxt_SESSION_TCP_SYN_SENT:
+        case jxt_SESSION_TCP_FIN_WAIT:
+        case jxt_SESSION_TCP_CLOSE_WAIT:
+        case jxt_SESSION_TCP_LAST_ACK:
           ses0->expire = now + dm->timeouts.tcp.transitory;
           break;
-        case DET44_SESSION_TCP_ESTABLISHED:
+        case jxt_SESSION_TCP_ESTABLISHED:
           ses0->expire = now + dm->timeouts.tcp.established;
           break;
         }
@@ -736,15 +769,15 @@ VLIB_NODE_FN (det44_in2out_node)
       if (PREDICT_FALSE ((node->flags & VLIB_NODE_FLAG_TRACE) &&
                          (b0->flags & VLIB_BUFFER_IS_TRACED)))
         {
-          det44_in2out_trace_t *t = vlib_add_trace (vm, node, b0, sizeof (*t));
+          jxt_in2out_trace_t *t = vlib_add_trace (vm, node, b0, sizeof (*t));
           t->sw_if_index = sw_if_index0;
           t->next_index = next0;
           t->session_index = ~0;
           if (ses0)
-            t->session_index = ses0 - mp0->sessions;
+            t->session_index = ses_index;
         }
 
-      pkts_processed += next0 != DET44_IN2OUT_NEXT_DROP;
+      pkts_processed += next0 != jxt_IN2OUT_NEXT_DROP;
 
       n_left_from--;
       next[0] = next0;
@@ -755,30 +788,30 @@ VLIB_NODE_FN (det44_in2out_node)
   vlib_buffer_enqueue_to_next (vm, node, from, (u16 *)nexts, frame->n_vectors);
 
   vlib_node_increment_counter (vm, dm->in2out_node_index,
-                               DET44_IN2OUT_ERROR_IN2OUT_PACKETS,
+                               jxt_IN2OUT_ERROR_IN2OUT_PACKETS,
                                pkts_processed);
   return frame->n_vectors;
 }
 
-// 用于注册一个节点函数（det44_in2out_node）
-// 将 det44_in2out_node
+// 用于注册一个节点函数（jxt_in2out_node）
+// 将 jxt_in2out_node
 // 这个节点函数注册为一个VPP节点，并定义了节点的一些属性，如节点名称、处理数据包的向量大小、跟踪函数等
 /* *INDENT-OFF* */
-VLIB_REGISTER_NODE (det44_in2out_node) = {
-    .name = "det44-in2out",
+VLIB_REGISTER_NODE (jxt_in2out_node) = {
+    .name = "jxt-in2out",
     .vector_size = sizeof (u32),
-    .format_trace = format_det44_in2out_trace,
+    .format_trace = format_jxt_in2out_trace,
     .type = VLIB_NODE_TYPE_INTERNAL,
-    .n_errors = ARRAY_LEN (det44_in2out_error_strings),
-    .error_strings = det44_in2out_error_strings,
-    .runtime_data_bytes = sizeof (det44_runtime_t),
-    .n_next_nodes = DET44_IN2OUT_N_NEXT,
+    .n_errors = ARRAY_LEN (jxt_in2out_error_strings),
+    .error_strings = jxt_in2out_error_strings,
+    .runtime_data_bytes = sizeof (jxt_runtime_t),
+    .n_next_nodes = jxt_IN2OUT_N_NEXT,
     /* edit / add dispositions here */
     .next_nodes =
         {
-            [DET44_IN2OUT_NEXT_DROP] = "error-drop",
-            [DET44_IN2OUT_NEXT_LOOKUP] = "ip4-lookup",
-            [DET44_IN2OUT_NEXT_ICMP_ERROR] = "ip4-icmp-error",
+            [jxt_IN2OUT_NEXT_DROP] = "error-drop",
+            [jxt_IN2OUT_NEXT_LOOKUP] = "ip4-lookup",
+            [jxt_IN2OUT_NEXT_ICMP_ERROR] = "ip4-icmp-error",
         },
 };
 /* *INDENT-ON* */

@@ -1,0 +1,27 @@
+det_main：my_user[8k]
+my_user：in_addr，sess_nums，my_sess[2k]
+my_sess：in_port，out_port，dst_ip，dst_port，expire
+
+代码流程：
+in2out：
+1、根据in_addr查找in_hash_table。
+2、若能查到，则获得用户，即in_addr数据结构my_user的索引i。准到步骤4。
+3、若不能查到，遍历用户数据结构my_user，找到一个sess_nums=0的my_user填入in_addr，转到步骤7。
+4、通过该索引i获得该in_addr对应的数据结构my_user[i]。
+5、通过该数据结构中的会话表my_sess，和数据包中的in_port，目标ip和目标端口，是否超时查找会话。
+6、若找到且没超时，使用该会话中的out_addr和out_port，更新会话超时时间。转到步骤8。
+7、若没找到或找到但超时，创建会话：找一个in_port=0的会话或过期会话进行创建，
+    根据in_addr（主机地址）获得对应out_addr以及out_port范围，根据in_port在相应out_port位置开始遍历，
+    找到一个未使用或者已超时的out_port创建会话，
+    更新会话信息，如in_port，out_addr，out_port，目标ip和目标端口，是否超时等。转到步骤8。
+8、使用查到或者新创建的会话，获得其中的out_addr以及out_port，完成映射。
+
+out2in：
+1、根据out_addr以及out_port查找out_hash_table。
+2、若能查到，获取in_addr数据结构my_user的索引i。转到步骤4.
+3、若不能查到，丢弃该数据包。
+4、通过该索引i获得该in_addr对应的数据结构my_user[i]，从中获得in_addr。
+5、通过该数据结构中的会话表my_sess，和数据包中的dst_port（即out_port），dst_addr（即out_addr），
+    src_addr（即目标ip），src_port（即目标端口），是否超时查找会话。
+6、若找到，获取其中的in_port。更新超时时间。完成映射。
+7、若找不到，说明超时，丢弃数据包。
