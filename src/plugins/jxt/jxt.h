@@ -152,10 +152,20 @@ typedef struct
 
 /*******************************************************/
 /*********************** my modify begin *******************/
+// is_TEST被定义则表明进入测试代码
+#define is_TEST 1
+
+#ifdef is_TEST
+    // 这里是仅在宏 is_TEST 被定义时执行的代码
+    #define MY_USERS 1
+#else
+    // 这里是在宏 is_TEST 未被定义时执行的代码
+    // 8k个用户
+    #define MY_USERS 8192
+#endif
+
 // 每个网段主机数量 
 #define MY_USERS_PER_SEG 256
-// 8k个用户
-#define MY_USERS 8192
 // 每个用户最多维护 2048 个会话
 #define MY_MAX_SESS_PER_USER 2048
 // in_port 可用端口个数，范围：1024-65535
@@ -166,6 +176,9 @@ typedef struct
 #define PORT_RANGE_2_START 3072
 #define PORT_RANGE_2_END 5119
 #define PORT_RANGE_SIZE 2048
+
+
+
 
 typedef struct
 {

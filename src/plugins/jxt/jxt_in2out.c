@@ -412,7 +412,7 @@ out:
 #endif
 
 
-
+// 创建会话
 static_always_inline my_sess_t *
 jxt_ses_create (jxt_main_t *dm, u32 thread_index, ip4_address_t *in_addr,
                 u16 *last_index, u16 *ses_index, my_user_t *user0,
@@ -476,7 +476,8 @@ VLIB_NODE_FN (jxt_in2out_node)
 
   /*********************** my modify begin *******************/
   snat_det_map_t *mp0;
-  my_user_t *user0;
+  my_user_t *user0 = (my_user_t *)malloc(sizeof(my_user_t));
+  user0->in_addr.as_u32 = 0;
   my_sess_t *ses0 = 0;
   /******************** my modify end *************************/
 
@@ -560,58 +561,68 @@ VLIB_NODE_FN (jxt_in2out_node)
       // 从上一次创建的用户索引开始遍历，last_user_index，
       // 遍历用户数据结构my_user，找到一个 ses_num = 0 的my_user填入in_addr。
       if (PREDICT_FALSE (rv != 0))
+      {
+        // 查找失败
+        user_index = (dm->last_user_index + 1) % MY_USERS;
+        for (i0 = 0; i0 < MY_USERS; i0++)
         {
-          user_index = (dm->last_user_index + 1) % MY_USERS;
-          for (i0 = 0; i0 < MY_USERS; i0++)
-            {
-              user_index = (user_index + i0) % MY_USERS;
-              user0 = &dm->my_users[user_index];
-              if (user0->in_addr.as_u32 == 0 || user0->ses_num == 0)
-                {
-                  // 添加哈希之前检查是否还能添加
-                  if(dm->in_hash_items_num < MY_USERS)
-                  {
-                    // 添加in哈希
-                    kv.key = (u64)ip0->src_address.as_u32 << 32;
-                    kv.value = user_index;
-                    clib_bihash_add_del_8_8 (&jxt_main.in_hash_table, &kv, 1);
-                    // 哈希表条目数量加一
-                    dm->in_hash_items_num ++;
-                  }
-                  else // 哈希表已满，删除找到的合适的用户原本in_addr对应的哈希
-                  {
-                    // 原本用户结构中存的 旧in_addr
-                    kv.key = (u64)user0->in_addr.as_u32 << 32;
-                    kv.value = user_index;
-                    clib_bihash_add_del_8_8 (&jxt_main.in_hash_table, &kv, 0);
+          user_index = (user_index + i0) % MY_USERS;
+          user0 = &dm->my_users[user_index];
+          if (user0->in_addr.as_u32 == 0 || user0->ses_num == 0)
+          {
+            // 找到一个空in_addr的 user，或者没有会话存在的user
 
-                    // 添加新in_addr对应的哈希
-                    kv.key = (u64)ip0->src_address.as_u32 << 32;
-                    kv.value = user_index;
-                    clib_bihash_add_del_8_8 (&jxt_main.in_hash_table, &kv, 1);
-                  }
-                  // 初始化成员
-                  user0->in_addr = ip0->src_address;
-                  user0->ses_num = 0;
-                  // 更新 上一次创建用户的索引
-                  dm->last_user_index = user_index; 
-                  break;
-                }
-                else // 没找到合适的用户结构
-                {
-                  jxt_log_info ("has reached the maximum number of users, internal host ip: %U",
-                  format_ip4_address, &ip0->src_address);
-                  next0 = jxt_IN2OUT_NEXT_DROP;
-                  b0->error = node->errors[jxt_IN2OUT_ERROR_NO_TRANSLATION];
-                  goto trace00;
-                }
+            // 添加哈希之前检查是否还能添加
+            if(dm->in_hash_items_num < MY_USERS)
+            {
+              // 添加in哈希
+              kv.key = (u64)ip0->src_address.as_u32 << 32;
+              kv.value = user_index;
+              clib_bihash_add_del_8_8 (&jxt_main.in_hash_table, &kv, 1);
+              // 哈希表条目数量加一
+              clib_atomic_add_fetch (&dm->in_hash_items_num, 1);
             }
+            else // 哈希表已满，删除找到的合适的用户原本in_addr对应的哈希
+            {
+              // 原本用户结构中存的 旧in_addr
+              kv.key = (u64)user0->in_addr.as_u32 << 32;
+              kv.value = user_index;
+              clib_bihash_add_del_8_8 (&jxt_main.in_hash_table, &kv, 0);
+
+              // 添加新in_addr对应的哈希
+              kv.key = (u64)ip0->src_address.as_u32 << 32;
+              kv.value = user_index;
+              clib_bihash_add_del_8_8 (&jxt_main.in_hash_table, &kv, 1);
+            }
+            // 初始化成员
+            user0->in_addr = ip0->src_address;
+            user0->ses_num = 0;
+            // 更新 上一次创建用户的索引
+            dm->last_user_index = user_index; 
+            break;
+          }
+          else 
+          {
+            // 该用户的in_addr正在被使用且还有会话，则遍历下一个
+            continue;
+          }
         }
-        else // 哈希表查找成功
+        // 判断：没找到则报错
+        if(PREDICT_FALSE(user0 -> in_addr.as_u32 == 0))
         {
-          // 拿到该 in_addr 的数据结构
-          user0 = &dm->my_users[value.value];
+          jxt_log_info ("has reached the maximum number of users, internal host ip: %U",
+          format_ip4_address, &ip0->src_address);
+          next0 = jxt_IN2OUT_NEXT_DROP;
+          b0->error = node->errors[jxt_IN2OUT_ERROR_NO_TRANSLATION];
+          goto trace00;
         }
+      }
+      else // 哈希表查找成功
+      {
+        // 拿到该 in_addr 的数据结构
+        user_index = value.value;
+        user0 = &dm->my_users[user_index];
+      }
 
       new_addr0 = user0->out_addr;
       in_port0 = udp0->src_port;
@@ -676,7 +687,7 @@ VLIB_NODE_FN (jxt_in2out_node)
 
       // 若找到，更新out_port
       new_port0 = user0->lo_port + ses_index;
-
+      
       // 如果能查到会话，则直接使用查到的会话中的地址和端口号，而不是
       // snat_det_forward 转换后的地址和端口号
       old_port0 = udp0->src_port;

@@ -433,13 +433,13 @@ VLIB_NODE_FN (jxt_out2in_node)
       // 此时 ip0->dst_address 即为 out_addr
       clib_bihash_kv_8_8_t kv;
       clib_bihash_kv_8_8_t value;
-      kv.key = (u64)(((u64)ip0->dst_address.as_u32 << 32) + tcp0->dst % 2);
+      kv.key = (u64)(((u64)ip0->dst_address.as_u32 << 32) + (tcp0->dst - PORT_RANGE_1_START) % PORT_RANGE_SIZE);
       kv.value = 0;
       value.key = 0;
       value.value = 0;
       int rv = clib_bihash_search_8_8 (&jxt_main.out_hash_table, &kv, &value);
 
-      if (PREDICT_FALSE (value.value >= MY_USERS || rv == 0))
+      if (PREDICT_FALSE (value.value >= MY_USERS || rv != 0))
         {
           // 没找到对应的映射表，处理错误逻辑
           jxt_log_info ("no match in_addr for external host ip %U",

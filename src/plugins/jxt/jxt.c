@@ -52,7 +52,7 @@ VLIB_PLUGIN_REGISTER () = {
 // 该函数作用是将指定的IP地址和子网前缀添加或删除到FIB中，并与指定的接口（sw_if_index）关联。
 // FIB是路由表的一种数据结构，用于存储网络中不同子网的路由信息，它决定了数据包从源地址到目标地址的转发路径。
 void jxt_add_del_addr_to_fib (ip4_address_t *addr, u8 p_len, u32 sw_if_index,
-                                int is_add)
+                              int is_add)
 {
   jxt_main_t *dm = &jxt_main;
   fib_prefix_t prefix = {
@@ -308,7 +308,7 @@ out:
       pool_foreach (mp, dm->det_maps)
       {
         jxt_add_del_addr_to_fib (&mp->out_addr, mp->out_plen, sw_if_index,
-                                   !is_del);
+                                 !is_del);
       }
       /* *INDENT-ON* */
     }
@@ -323,7 +323,7 @@ out:
 // 进程的处理函数，定期扫描jxt会话，检查是否有过期的会话，并将其关闭
 // 在每次执行时，会遍历jxt插件中的所有jxt映射表，并检查每个映射表中的会话是否过期。
 static uword jxt_expire_walk_fn (vlib_main_t *vm, vlib_node_runtime_t *rt,
-                                   vlib_frame_t *f)
+                                 vlib_frame_t *f)
 {
   jxt_main_t *dm = &jxt_main;
   snat_det_session_t *ses;
@@ -387,7 +387,7 @@ int jxt_plugin_enable (jxt_config_t c)
   /*-------------------------------------------------------------*/
   u16 i0, j0;
 
-  //初始化上一次 创建用户索引 为最大值
+  // 初始化上一次 创建用户索引 为最大值
   dm->last_user_index = MY_USERS - 1;
   dm->in_hash_items_num = 0;
 
@@ -402,29 +402,36 @@ int jxt_plugin_enable (jxt_config_t c)
       dm->my_users[i0].ses_num = 0;
       // 初始化 in_addr 和 out_addr 全零
       dm->my_users[i0].in_addr = empty_my_addr;
-      dm->my_users[i0].out_addr = empty_my_addr;  
+      dm->my_users[i0].out_addr = empty_my_addr;
 
-      // 32 * 128 = 4096   
+      // 32 * 128 = 4096
       // 10.2.0.0 - 10.2.0.127
       // ...
-      // 10.2.31.0 - 10.2.31.127   
+      // 10.2.31.0 - 10.2.31.127
       // 初始化 out_addr
-      dm->my_users[i0].out_addr.as_u32 =
-          clib_host_to_net_u32 (0x0A020000) +
-          clib_host_to_net_u32 ((i0 / MY_USERS_PER_SEG) << 8) +
-          clib_host_to_net_u32 ((i0 % MY_USERS_PER_SEG) / 2);
-      
-      // 初始化 会话索引 为非法值
-      memset(dm->my_users[i0].my_sess_index_by_in, ~0, MY_AVAI_PORT_NUM_BY_IN*sizeof(u16));
+      #ifdef is_TEST
+            // 这里是仅在宏 is_TEST 被定义时执行的代码
+            dm->my_users[i0].out_addr.as_u32 =
+                clib_host_to_net_u32 (0x0AE9E90A); // 10.233.233.10
+      #else
+            // 这里是在宏 is_TEST 未被定义时执行的代码
+            dm->my_users[i0].out_addr.as_u32 =
+                clib_host_to_net_u32 (0x0A020000) +
+                clib_host_to_net_u32 ((i0 / MY_USERS_PER_SEG) << 8) +
+                clib_host_to_net_u32 ((i0 % MY_USERS_PER_SEG) / 2);
+      #endif
 
+      // 初始化 会话索引 为非法值
+      memset (dm->my_users[i0].my_sess_index_by_in, ~0,
+              MY_AVAI_PORT_NUM_BY_IN * sizeof (u16));
 
       // 初始化 会话表 全零
-      for (j0 = 0; j0 < MY_MAX_SESS_PER_USER; j0++) 
-      {
-        dm->my_users[i0].my_sess[j0] = empty_my_sess;
-      }
+      for (j0 = 0; j0 < MY_MAX_SESS_PER_USER; j0++)
+        {
+          dm->my_users[i0].my_sess[j0] = empty_my_sess;
+        }
 
-      //初始化上一次 会话 索引为最大值
+      // 初始化上一次 会话 索引为最大值
       dm->my_users[i0].last_ses_index = MY_MAX_SESS_PER_USER - 1;
 
       // 初始化每个 in_addr 对应的外部端口范围
@@ -441,30 +448,28 @@ int jxt_plugin_enable (jxt_config_t c)
   for (i0 = 0; i0 < MY_USERS; i0++)
     {
       // out_hash_table
-      // 将每个 out_addr 和 out_port (0或1) 作为键，映射表的索引作为值，插入哈希表
-      // 10.2.0.0 + 0 -> 0
-      // 10.2.0.0 + 1 -> 1
-      // 10.2.0.1 + 0 -> 2
+      // 将每个 out_addr 和 out_port (0或1)
+      // 作为键，映射表的索引作为值，插入哈希表 10.2.0.0 + 0 -> 0 10.2.0.0 + 1
+      // -> 1 10.2.0.1 + 0 -> 2
       // ...
       // 10.2.0.127 + 1 -> 255
       // 10.2.1.0 + 0 -> 256
-      if(i0 % 2 == 0)
-      {
-        kv.key = (u64)(((u64)dm->my_users[i0].out_addr.as_u32 << 32) + 0);
-        kv.value = i0;
-        clib_bihash_add_del_8_8 (&jxt_main.out_hash_table, &kv, 1);
-      }
-      if(i0 % 2 == 1)
-      {
-        kv.key = (u64)(((u64)dm->my_users[i0].out_addr.as_u32 << 32) + 1);
-        kv.value = i0;
-        clib_bihash_add_del_8_8 (&jxt_main.out_hash_table, &kv, 1);  
-      }
+      if (i0 % 2 == 0)
+        {
+          kv.key = (u64)(((u64)dm->my_users[i0].out_addr.as_u32 << 32) + 0);
+          kv.value = i0;
+          clib_bihash_add_del_8_8 (&jxt_main.out_hash_table, &kv, 1);
+        }
+      if (i0 % 2 == 1)
+        {
+          kv.key = (u64)(((u64)dm->my_users[i0].out_addr.as_u32 << 32) + 1);
+          kv.value = i0;
+          clib_bihash_add_del_8_8 (&jxt_main.out_hash_table, &kv, 1);
+        }
     }
 
   return 0;
 }
-
 
 // 禁用jxt插件
 int jxt_plugin_disable ()
@@ -496,7 +501,7 @@ int jxt_plugin_disable ()
         if (rv)
           {
             jxt_log_err ("inside interface %U del failed",
-                           unformat_vnet_sw_interface, vnm, i->sw_if_index);
+                         unformat_vnet_sw_interface, vnm, i->sw_if_index);
           }
       }
 
@@ -506,7 +511,7 @@ int jxt_plugin_disable ()
         if (rv)
           {
             jxt_log_err ("outside interface %U del failed",
-                           unformat_vnet_sw_interface, vnm, i->sw_if_index);
+                         unformat_vnet_sw_interface, vnm, i->sw_if_index);
           }
       }
   }
@@ -531,8 +536,8 @@ int jxt_plugin_disable ()
 // jxt插件维护了一个外部FIB表列表，其中每个元素代表一个外部FIB表，并记录了该FIB表的索引和引用计数。
 // 引用计数用于跟踪当前使用该FIB表的接口数量，当引用计数为0时，表示该FIB表不再被使用，可以从列表中移除。
 static void jxt_update_outside_fib (ip4_main_t *im, uword opaque,
-                                      u32 sw_if_index, u32 new_fib_index,
-                                      u32 old_fib_index)
+                                    u32 sw_if_index, u32 new_fib_index,
+                                    u32 old_fib_index)
 {
   jxt_main_t *dm = &jxt_main;
 
@@ -641,9 +646,9 @@ u8 *format_jxt_session_state (u8 *s, va_list *args)
 
   switch (i)
     {
-#define _(v, N, str)      \
+#define _(v, N, str)    \
   case jxt_SESSION_##N: \
-    t = (u8 *)str;        \
+    t = (u8 *)str;      \
     break;
       foreach_jxt_session_state
 #undef _
@@ -675,8 +680,8 @@ u8 *format_det_map_ses (u8 *s, va_list *args)
       format_ip4_address, &in_addr, clib_net_to_host_u16 (ses->in_port),
       format_ip4_address, &out_addr, clib_net_to_host_u16 (ses->out.out_port),
       format_ip4_address, &ses->out.ext_host_addr,
-      clib_net_to_host_u16 (ses->out.ext_host_port),
-      format_jxt_session_state, ses->state, ses->expire);
+      clib_net_to_host_u16 (ses->out.ext_host_port), format_jxt_session_state,
+      ses->state, ses->expire);
 
   return s;
 }

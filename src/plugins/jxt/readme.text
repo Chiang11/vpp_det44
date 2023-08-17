@@ -7,13 +7,14 @@ det_main：my_user[8k]
 代码流程：
 in2out：
 1、根据in_addr查找in_hash_table。
-2、若能查到，则获得 in_addr 数据结构my_user的索引i。准到步骤4。
+2、若能查到，则获得 in_addr 数据结构my_user的索引i。转到步骤4。
 3、若不能查到，遍历用户数据结构my_user，找到一个 sess_nums=0 的my_user填入in_addr：
     det_main中维护一个last_user_index的索引，表示上一次 创建 用户结构的索引
     每次新来的查不到 in_hash 的 in_addr 就从 last_user_index 开始遍历，
     找到一个 sess_nums=0 的用户结构（空用户，或者有用户，但是没有会话），更新其中的 in_addr，并添加哈希
-    若哈希表已满，删掉原来的哈希条目，再添加
-    若哈希表未满，添加
+        若哈希表已满，删掉原来的哈希条目，再添加
+        若哈希表未满，添加
+    若遍历完了，还没找到则报错
 4、通过该索引i获得该in_addr对应的数据结构my_user[i]。获取其中的 out_addr
 5、通过该数据结构中的会话索引数组 my_sess_index_by_in，将数据包中的 in_port 作为索引，
     查找会话索引 i0 = my_sess_index_by_in[in_port]。
@@ -21,24 +22,27 @@ in2out：
     （因为in_port可以从64k个里面随机一个，但是out_port的范围只有2k，意味着32个in_port会对应一个out_port，
     这时候就要判断拿到会话中的in_port是不是这次数据包的in_port）
 7、若i0为非法值（如~0），表示该in_port还未创建会话。转到步骤10
+
 8、根据该会话索引i0，和 my_sess，得到会话数据结构my_sess[i0]。判断 my_sess[i0].in_port 是否等于 0 以及 是否超时
-9、若 等于0 或超时，转到步骤13
+9、若等于0 或超时，转到步骤13
 10、若不等于0，判断 my_sess[i0].in_port 是否等于 in_port
 11、若相等（未超时）。更新超时时间。转到步骤14
 12、若不相等（未超时），遍历下一个会话（记录上一次的使用的会话索引为last_index），
     找到一个 my_sess[i0].in_port = 0 或 my_sess[i0].expire超时的会话，转到步骤13
 13、若不相等，且超时，将 my_sess_index_by_in[my_sess[i0].in_port] （原会话in_port对应的会话索引）置为非法值，
     更新 my_sess[i0].in_port 和 expire。
+
 14、此时已经拿到一个有效会话及其索引i0，更新 my_sess_index_by_in[in_port] 对应的索引（方便下次来的时候直接找到这个会话）
-    则out_port = lo_port + i0 （out_port 和 每个sess 是一一对应关系）
+    则out_port = lo_port + i0 （out_port 和 每个sess 是一一对应关系）。
+
 
 
 
 out2in：
-1、根据out_addr以及 out_port % 2 - 1 （即0或1） 查找out_hash_table。
-2、若能查到，获取in_addr数据结构my_user的索引i。转到步骤4.
+1、根据out_addr以及 out_port_index_by_out_addr = (out_port - 1024) % 2048 （即0或1） 查找out_hash_table。
+2、若能查到，获取my_user的索引user_index。转到步骤4.
 3、若不能查到，丢弃该数据包。
-4、通过该索引i获得该in_addr对应的数据结构my_user[i]，从中获得in_addr。
+4、通过该索引user_index获得对应的数据结构my_user[user_index]，从中获得in_addr。
 5、根据dst_addr（即out_addr），计算会话索引 i0 = out_port - lo_port
 6、根据 i0 得到对应的会话 my_sess[i0]，判断是否超时
 7、若超时，丢弃数据包。若未超时，获取其中的in_port。
@@ -48,5 +52,9 @@ out2in：
 in2out：
 其实每次查找不需要目标ip和目标端口，因为不存在端口复用
 一个in_addr的端口就对应一个out_addr的端口
+
+
+关于负载：
+目标：如何选择一个负载较低的外部端口进行映射？
 
 
