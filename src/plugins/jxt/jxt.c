@@ -412,7 +412,7 @@ int jxt_plugin_enable (jxt_config_t c)
       #ifdef is_TEST
             // 这里是仅在宏 is_TEST 被定义时执行的代码
             dm->my_users[i0].out_addr.as_u32 =
-                clib_host_to_net_u32 (0x0AE9E90A); // 10.233.233.10
+                clib_host_to_net_u32 (0x0AE9E90E); // 10.233.233.14
       #else
             // 这里是在宏 is_TEST 未被定义时执行的代码
             dm->my_users[i0].out_addr.as_u32 =
@@ -458,13 +458,13 @@ int jxt_plugin_enable (jxt_config_t c)
         {
           kv.key = (u64)(((u64)dm->my_users[i0].out_addr.as_u32 << 32) + 0);
           kv.value = i0;
-          clib_bihash_add_del_8_8 (&jxt_main.out_hash_table, &kv, 1);
+          clib_bihash_add_del_8_8 (&dm->out_hash_table, &kv, 1);
         }
       if (i0 % 2 == 1)
         {
           kv.key = (u64)(((u64)dm->my_users[i0].out_addr.as_u32 << 32) + 1);
           kv.value = i0;
-          clib_bihash_add_del_8_8 (&jxt_main.out_hash_table, &kv, 1);
+          clib_bihash_add_del_8_8 (&dm->out_hash_table, &kv, 1);
         }
     }
 

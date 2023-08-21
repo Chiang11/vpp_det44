@@ -547,7 +547,7 @@ VLIB_NODE_FN (jxt_in2out_node)
       kv.value = 0;
       value.key = 0;
       value.value = 0;
-      int rv = clib_bihash_search_8_8 (&jxt_main.in_hash_table, &kv, &value);
+      int rv = clib_bihash_search_8_8 (&dm->in_hash_table, &kv, &value);
       // if (rv == 0) {
       //     // 键存在于哈希表中，输出键值对的内容
       //     vlib_cli_output (vm, "键: %llu, 值: %u\n", kv.key, value.value);
@@ -578,7 +578,7 @@ VLIB_NODE_FN (jxt_in2out_node)
               // 添加in哈希
               kv.key = (u64)ip0->src_address.as_u32 << 32;
               kv.value = user_index;
-              clib_bihash_add_del_8_8 (&jxt_main.in_hash_table, &kv, 1);
+              clib_bihash_add_del_8_8 (&dm->in_hash_table, &kv, 1);
               // 哈希表条目数量加一
               clib_atomic_add_fetch (&dm->in_hash_items_num, 1);
             }
@@ -587,12 +587,12 @@ VLIB_NODE_FN (jxt_in2out_node)
               // 原本用户结构中存的 旧in_addr
               kv.key = (u64)user0->in_addr.as_u32 << 32;
               kv.value = user_index;
-              clib_bihash_add_del_8_8 (&jxt_main.in_hash_table, &kv, 0);
+              clib_bihash_add_del_8_8 (&dm->in_hash_table, &kv, 0);
 
               // 添加新in_addr对应的哈希
               kv.key = (u64)ip0->src_address.as_u32 << 32;
               kv.value = user_index;
-              clib_bihash_add_del_8_8 (&jxt_main.in_hash_table, &kv, 1);
+              clib_bihash_add_del_8_8 (&dm->in_hash_table, &kv, 1);
             }
             // 初始化成员
             user0->in_addr = ip0->src_address;
