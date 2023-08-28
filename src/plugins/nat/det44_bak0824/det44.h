@@ -41,6 +41,9 @@
 #include <nat/lib/inlines.h>
 #include <nat/lib/ipfix_logging.h>
 
+#include <vppinfra/bihash_8_8.h>
+#include <vppinfra/bihash_16_8.h>
+
 /* Session state */
 #define foreach_det44_session_state         \
   _ (0, UNKNOWN, "unknown")                 \
@@ -95,6 +98,8 @@ typedef struct
   };
 } snat_det_out_key_t;
 
+
+
 typedef struct
 {
   /* Inside network port */
@@ -105,7 +110,9 @@ typedef struct
   u8 state;
   /* Expire timeout */
   u32 expire;
+
 } snat_det_session_t;
+
 
 typedef struct
 {
@@ -142,6 +149,58 @@ typedef struct
   u32 fib_index;
   u32 refcount;
 } det44_fib_t;
+
+/*******************************************************/
+/*********************** my modify begin *******************/
+
+// 有64个映射表
+#define MY_MAX_DET_MAPS 64
+// 每个映射表有64个外部地址，即64个会话表
+#define MY_SESS_TABLES_PER_MAP 64
+#define MY_PLEN 25
+// 每个会话表有 4096 个会话。每个外部地址对应两个内部地址
+#define MY_SESSIONS_PER_EXTERNAL_ADDR 4096
+
+typedef struct
+{
+  /* Inside network port */
+  u16 in_port;
+  /* Outside network address and port */
+  snat_det_out_key_t out;
+  /* Session state */
+  u8 state;
+  /* Expire timeout */
+  u32 expire;
+} my_session_t;
+
+
+typedef struct
+{
+  /* session counter */
+  u32 ses_num;
+  /* vector of sessions */
+  // sessions 里面存的是这个会话表里面4096个会话
+  my_session_t *my_sessions;
+} my_session_table_t;
+
+
+typedef struct
+{
+  /* inside IP address range */
+  ip4_address_t in_addr;
+  u8 in_plen;
+  /* outside IP address range */
+  ip4_address_t out_addr;
+  u8 out_plen;
+  /* inside IP addresses / outside IP addresses */
+  u32 sharing_ratio;
+  /* number of ports available to internal host */
+  u16 ports_per_host;
+  // sessions_tables 里面存的是这个映射表里面64个外部地址每个地址的会话表
+  // 一共64个
+  my_session_table_t *my_sessions_tables;
+} my_map_t;
+
 
 typedef struct det44_main_s
 {
@@ -186,9 +245,21 @@ typedef struct det44_main_s
   /* required */
   vnet_main_t *vnet_main;
 
+  /* --------------------my---------------------*/
+  // 哈希表
+  clib_bihash_8_8_t in_addr_hash_table; 
+  clib_bihash_8_8_t out_addr_hash_table; 
+  // 映射表
+  my_map_t *my_maps;
+  /* --------------------my---------------------*/
+
 } det44_main_t;
 
+
 extern det44_main_t det44_main;
+
+/******************** my modify end *************************/
+/***********************************************************/
 
 /* logging */
 #define det44_log_err(...) \
@@ -323,7 +394,7 @@ static_always_inline void snat_det_forward (snat_det_map_t *dm,
   // 计算得到 外部地址
   out_addr->as_u32 = clib_host_to_net_u32 (
       clib_net_to_host_u32 (dm->out_addr.as_u32) + out_offset);
-  // 计算得到 该用户会话表的起始会话端口
+  // 计算得到 临时外部端口
   *lo_port = 1024 + dm->ports_per_host * (in_offset % dm->sharing_ratio);
 }
 

@@ -25,8 +25,8 @@
 #include <vppinfra/error.h>
 #include <vppinfra/elog.h>
 
-#include <plugins/jxt/jxt.h>
-#include <plugins/jxt/jxt_inlines.h>
+#include <nat/det44/det44.h>
+#include <nat/det44/det44_inlines.h>
 
 #include <nat/lib/lib.h>
 #include <nat/lib/inlines.h>
@@ -34,20 +34,20 @@
 
 typedef enum
 {
-  jxt_OUT2IN_NEXT_DROP,
-  jxt_OUT2IN_NEXT_LOOKUP,
-  jxt_OUT2IN_NEXT_ICMP_ERROR,
-  jxt_OUT2IN_N_NEXT,
-} jxt_out2in_next_t;
+  DET44_OUT2IN_NEXT_DROP,
+  DET44_OUT2IN_NEXT_LOOKUP,
+  DET44_OUT2IN_NEXT_ICMP_ERROR,
+  DET44_OUT2IN_N_NEXT,
+} det44_out2in_next_t;
 
 typedef struct
 {
   u32 sw_if_index;
   u32 next_index;
   u32 session_index;
-} jxt_out2in_trace_t;
+} det44_out2in_trace_t;
 
-#define foreach_jxt_out2in_error                 \
+#define foreach_det44_out2in_error                 \
   _ (UNSUPPORTED_PROTOCOL, "Unsupported protocol") \
   _ (NO_TRANSLATION, "No translation")             \
   _ (BAD_ICMP_TYPE, "unsupported ICMP type")       \
@@ -55,26 +55,26 @@ typedef struct
 
 typedef enum
 {
-#define _(sym, str) jxt_OUT2IN_ERROR_##sym,
-  foreach_jxt_out2in_error
+#define _(sym, str) DET44_OUT2IN_ERROR_##sym,
+  foreach_det44_out2in_error
 #undef _
-      jxt_OUT2IN_N_ERROR,
-} jxt_out2in_error_t;
+      DET44_OUT2IN_N_ERROR,
+} det44_out2in_error_t;
 
-static char *jxt_out2in_error_strings[] = {
+static char *det44_out2in_error_strings[] = {
 #define _(sym, string) string,
-    foreach_jxt_out2in_error
+    foreach_det44_out2in_error
 #undef _
 };
 
-static u8 *format_jxt_out2in_trace (u8 *s, va_list *args)
+static u8 *format_det44_out2in_trace (u8 *s, va_list *args)
 {
   CLIB_UNUSED (vlib_main_t * vm) = va_arg (*args, vlib_main_t *);
   CLIB_UNUSED (vlib_node_t * node) = va_arg (*args, vlib_node_t *);
-  jxt_out2in_trace_t *t = va_arg (*args, jxt_out2in_trace_t *);
+  det44_out2in_trace_t *t = va_arg (*args, det44_out2in_trace_t *);
 
   s = format (s,
-              "jxt_OUT2IN: sw_if_index %d, next index %d, session index %d",
+              "DET44_OUT2IN: sw_if_index %d, next index %d, session index %d",
               t->sw_if_index, t->next_index, t->session_index);
   return s;
 }
@@ -100,7 +100,7 @@ u32 icmp_match_out2in_det (vlib_node_runtime_t *node, u32 thread_index,
                            nat_protocol_t *proto, void *d, void *e,
                            u8 *dont_translate)
 {
-  jxt_main_t *dm = &jxt_main;
+  det44_main_t *dm = &det44_main;
   icmp46_header_t *icmp0;
   u32 sw_if_index0;
   u8 protocol;
@@ -151,8 +151,8 @@ u32 icmp_match_out2in_det (vlib_node_runtime_t *node, u32 thread_index,
           key0.out_port = ((tcp_udp_header_t *)l4_header)->src_port;
           break;
         default:
-          b0->error = node->errors[jxt_OUT2IN_ERROR_UNSUPPORTED_PROTOCOL];
-          next0 = jxt_OUT2IN_NEXT_DROP;
+          b0->error = node->errors[DET44_OUT2IN_ERROR_UNSUPPORTED_PROTOCOL];
+          next0 = DET44_OUT2IN_NEXT_DROP;
           goto out;
         }
     }
@@ -161,13 +161,13 @@ u32 icmp_match_out2in_det (vlib_node_runtime_t *node, u32 thread_index,
   if (PREDICT_FALSE (!mp0))
     {
       /* Don't NAT packet aimed at the intfc address */
-      if (PREDICT_FALSE (!jxt_is_interface_addr (node, sw_if_index0,
+      if (PREDICT_FALSE (!det44_is_interface_addr (node, sw_if_index0,
                                                    ip0->dst_address.as_u32)))
         {
           *dont_translate = 1;
           goto out;
         }
-      jxt_log_info ("unknown dst address:  %U", format_ip4_address,
+      det44_log_info ("unknown dst address:  %U", format_ip4_address,
                       &ip0->dst_address);
       goto out;
     }
@@ -179,19 +179,19 @@ u32 icmp_match_out2in_det (vlib_node_runtime_t *node, u32 thread_index,
   if (PREDICT_FALSE (!ses0))
     {
       /* Don't NAT packet aimed at the intfc address */
-      if (PREDICT_FALSE (!jxt_is_interface_addr (node, sw_if_index0,
+      if (PREDICT_FALSE (!det44_is_interface_addr (node, sw_if_index0,
                                                    ip0->dst_address.as_u32)))
         {
           *dont_translate = 1;
           goto out;
         }
-      jxt_log_info (
+      det44_log_info (
           "no match src %U:%d dst %U:%d for user %U", format_ip4_address,
           &key0.ext_host_addr, clib_net_to_host_u16 (key0.ext_host_port),
           format_ip4_address, &out_addr, clib_net_to_host_u16 (key0.out_port),
           format_ip4_address, &new_addr0);
-      b0->error = node->errors[jxt_OUT2IN_ERROR_NO_TRANSLATION];
-      next0 = jxt_OUT2IN_NEXT_DROP;
+      b0->error = node->errors[DET44_OUT2IN_ERROR_NO_TRANSLATION];
+      next0 = DET44_OUT2IN_NEXT_DROP;
       goto out;
     }
 
@@ -200,8 +200,8 @@ u32 icmp_match_out2in_det (vlib_node_runtime_t *node, u32 thread_index,
                      !icmp_type_is_error_message (
                          vnet_buffer (b0)->ip.reass.icmp_type_or_tcp_flags)))
     {
-      b0->error = node->errors[jxt_OUT2IN_ERROR_BAD_ICMP_TYPE];
-      next0 = jxt_OUT2IN_NEXT_DROP;
+      b0->error = node->errors[DET44_OUT2IN_ERROR_BAD_ICMP_TYPE];
+      next0 = DET44_OUT2IN_NEXT_DROP;
       goto out;
     }
 
@@ -224,7 +224,7 @@ out:
 #endif
 
 #ifndef CLIB_MARCH_VARIANT
-u32 jxt_icmp_out2in (vlib_buffer_t *b0, ip4_header_t *ip0,
+u32 det44_icmp_out2in (vlib_buffer_t *b0, ip4_header_t *ip0,
                        icmp46_header_t *icmp0, u32 sw_if_index0,
                        u32 rx_fib_index0, vlib_node_runtime_t *node, u32 next0,
                        u32 thread_index, void *d, void *e)
@@ -247,7 +247,7 @@ u32 jxt_icmp_out2in (vlib_buffer_t *b0, ip4_header_t *ip0,
                              &fib_index, &proto, d, e, &dont_translate);
   if (next0_tmp != ~0)
     next0 = next0_tmp;
-  if (next0 == jxt_OUT2IN_NEXT_DROP || dont_translate)
+  if (next0 == DET44_OUT2IN_NEXT_DROP || dont_translate)
     goto out;
 
   if (PREDICT_TRUE (!ip4_is_fragment (ip0)))
@@ -258,7 +258,7 @@ u32 jxt_icmp_out2in (vlib_buffer_t *b0, ip4_header_t *ip0,
       checksum0 = ~ip_csum_fold (sum0);
       if (checksum0 != 0 && checksum0 != 0xffff)
         {
-          next0 = jxt_OUT2IN_NEXT_DROP;
+          next0 = DET44_OUT2IN_NEXT_DROP;
           goto out;
         }
     }
@@ -300,7 +300,7 @@ u32 jxt_icmp_out2in (vlib_buffer_t *b0, ip4_header_t *ip0,
 
           if (!ip4_header_checksum_is_valid (inner_ip0))
             {
-              next0 = jxt_OUT2IN_NEXT_DROP;
+              next0 = DET44_OUT2IN_NEXT_DROP;
               goto out;
             }
 
@@ -350,14 +350,12 @@ out:
 }
 #endif
 
-
-
-VLIB_NODE_FN (jxt_out2in_node)
+VLIB_NODE_FN (det44_out2in_node)
 (vlib_main_t *vm, vlib_node_runtime_t *node, vlib_frame_t *frame)
 {
   u32 n_left_from, *from;
   u32 pkts_processed = 0;
-  jxt_main_t *dm = &jxt_main;
+  det44_main_t *dm = &det44_main;
   u32 thread_index = vm->thread_index;
 
   from = vlib_frame_vector_args (frame);
@@ -367,30 +365,25 @@ VLIB_NODE_FN (jxt_out2in_node)
   u16 nexts[VLIB_FRAME_SIZE], *next = nexts;
   vlib_get_buffers (vm, from, b, n_left_from);
 
-  u32 now = (u32)vlib_time_now (vm);
-
   while (n_left_from > 0)
     {
       vlib_buffer_t *b0;
-      u32 next0 = jxt_OUT2IN_NEXT_LOOKUP;
+      u32 next0 = DET44_OUT2IN_NEXT_LOOKUP;
       u32 sw_if_index0;
       ip4_header_t *ip0;
       ip_csum_t sum0;
-      
+      ip4_address_t new_addr0, old_addr0;
+      u16 new_port0, old_port0, lo_port0, i0;
       udp_header_t *udp0;
       tcp_header_t *tcp0;
       u32 proto0;
-      // snat_det_out_key_t key0;
+      snat_det_out_key_t key0;
       u32 rx_fib_index0;
       icmp46_header_t *icmp0;
 
       /*******************************/
-      snat_det_map_t *mp0;
-      my_user_t *user0;
-      my_sess_t *ses0 = 0;
-      ip4_address_t new_addr0, old_addr0;
-      u16 new_port0, old_port0, ses_index;
-      
+      my_map_t *mp0;
+      my_session_t *ses0 = 0;
       /***********************************/
 
       b0 = *b;
@@ -408,7 +401,7 @@ VLIB_NODE_FN (jxt_out2in_node)
           icmp4_error_set_vnet_buffer (
               b0, ICMP4_time_exceeded,
               ICMP4_time_exceeded_ttl_exceeded_in_transit, 0);
-          next0 = jxt_OUT2IN_NEXT_ICMP_ERROR;
+          next0 = DET44_OUT2IN_NEXT_ICMP_ERROR;
           goto trace00;
         }
 
@@ -421,68 +414,105 @@ VLIB_NODE_FN (jxt_out2in_node)
           icmp0 = (icmp46_header_t *)udp0;
 
           next0 =
-              jxt_icmp_out2in (b0, ip0, icmp0, sw_if_index0, rx_fib_index0,
+              det44_icmp_out2in (b0, ip0, icmp0, sw_if_index0, rx_fib_index0,
                                  node, next0, thread_index, &ses0, &mp0);
           goto trace00;
         }
 
+      //
+      key0.ext_host_addr = ip0->src_address;
+      key0.ext_host_port = tcp0->src;
+      key0.out_port = tcp0->dst;
 
       /**********************************************************/
 
-      // 根据 out_addr 和 out_port % 2 - 1 （即0或1） 查找out_hash_table
+      // 根据 数据包目标ip（外部ip） 查找映射表
+      // 从外部主机发送到nat的数据包
       // 此时 ip0->dst_address 即为 out_addr
       clib_bihash_kv_8_8_t kv;
       clib_bihash_kv_8_8_t value;
-      u32 a = (tcp0->dst - PORT_RANGE_1_START) / PORT_RANGE_SIZE;
-      kv.key = (u64)(((u64)ip0->dst_address.as_u32 << 32) + a);
-      // kv.key = (u64)(((u64)ip0->dst_address.as_u32 << 32) + 0);
+      kv.key = (u64)(ip0->dst_address.as_u32 & ip4_main.fib_masks[MY_PLEN])
+               << 32;
       kv.value = 0;
       value.key = 0;
       value.value = 0;
-      int rv = clib_bihash_search_8_8 (&dm->out_hash_table, &kv, &value);
+      clib_bihash_search_8_8 (&det44_main.out_addr_hash_table, &kv, &value);
 
-      if (PREDICT_FALSE (value.value >= MY_USERS || rv != 0))
+      if (PREDICT_FALSE (value.value >= MY_MAX_DET_MAPS))
         {
           // 没找到对应的映射表，处理错误逻辑
-          // jxt_log_info ("no match in_addr for external host ip %U",
-          //                 format_ip4_address, &ip0->src_address);
-          next0 = jxt_OUT2IN_NEXT_DROP;
-          b0->error = node->errors[jxt_OUT2IN_ERROR_NO_TRANSLATION];
+          det44_log_info ("no match mapping for internal host ip %U",
+                          format_ip4_address, &ip0->src_address);
+          next0 = DET44_OUT2IN_NEXT_DROP;
+          b0->error = node->errors[DET44_OUT2IN_ERROR_NO_TRANSLATION];
           goto trace00;
         }
 
-      user0 = &dm->my_users[value.value];
-      new_addr0 = user0 -> in_addr;
+      mp0 = &dm->my_maps[value.value];
 
-      ses_index = tcp0->dst - user0->lo_port;
-      ses0 = &user0->my_sess[ses_index];
-      new_port0 = ses0 -> in_port;
-
-      if (PREDICT_FALSE (ses0->expire <= now))
+      if (PREDICT_FALSE (!mp0))
         {
-          // 没找到对应的映射表，处理错误逻辑
-          // jxt_log_info ("no match sess for external host port %U",
-          //                 format_ip4_address, &ip0->src_address);
-          next0 = jxt_OUT2IN_NEXT_DROP;
-          b0->error = node->errors[jxt_OUT2IN_ERROR_NO_TRANSLATION];
+          det44_log_info ("unknown dst address:  %U", format_ip4_address,
+                          &ip0->dst_address);
+          next0 = DET44_OUT2IN_NEXT_DROP;
+          b0->error = node->errors[DET44_OUT2IN_ERROR_NO_TRANSLATION];
           goto trace00;
         }
 
+      // 根据 外部ip，外部端口，计算 in_addr
+      // 将转换后的 in_addr 存入 new_addr0
+      u32 table_index = ip0->dst_address.as_u8[3];
+      if (table_index >= 64)
+        {
+          det44_log_info ("invalid internal host ip %U", format_ip4_address,
+                          &ip0->dst_address);
+          next0 = DET44_OUT2IN_NEXT_DROP;
+          b0->error = node->errors[DET44_OUT2IN_ERROR_NO_TRANSLATION];
+          goto trace00;
+        }
+
+      my_session_table_t *table0 = &mp0->my_sessions_tables[table_index];
+
+      // 将外部起始地址与偏移量相加得到映射到的外部地址
+      bool is_find = false;
+      for (u16 i = 0; i < 2; i++)
+        {
+          lo_port0 = 1024 * (i + 1);
+
+          for (i0 = 0; i0 < MY_SESSIONS_PER_EXTERNAL_ADDR / 2; i0++)
+            {
+              ses0 = &table0->my_sessions[i0 + lo_port0];
+              if (ses0->out.ext_host_addr.as_u32 ==
+                      key0.ext_host_addr.as_u32 &&
+                  ses0->out.ext_host_port == key0.ext_host_port)
+                {
+                  // 找到
+                  new_port0 = i0 + lo_port0;
+                  is_find = true;
+                  break;
+                }
+            }
+          if (is_find)
+            break;
+        }
+      // 没找到
+      if (!is_find)
+        ses0 = 0;
 
       if (PREDICT_FALSE (!ses0))
         {
-          jxt_log_info ("no match src %U:%d dst %U:%d for user %U",
+          det44_log_info ("no match src %U:%d dst %U:%d for user %U",
                           format_ip4_address, &ip0->src_address,
                           clib_net_to_host_u16 (tcp0->src), format_ip4_address,
                           &ip0->dst_address, clib_net_to_host_u16 (tcp0->dst),
                           format_ip4_address, &new_addr0);
-          next0 = jxt_OUT2IN_NEXT_DROP;
-          b0->error = node->errors[jxt_OUT2IN_ERROR_NO_TRANSLATION];
+          next0 = DET44_OUT2IN_NEXT_DROP;
+          b0->error = node->errors[DET44_OUT2IN_ERROR_NO_TRANSLATION];
           goto trace00;
         }
 
       old_port0 = udp0->dst_port;
-      udp0->dst_port = new_port0;
+      udp0->dst_port = new_port0 = ses0->in_port;
 
       old_addr0 = ip0->dst_address;
       ip0->dst_address = new_addr0;
@@ -496,21 +526,22 @@ VLIB_NODE_FN (jxt_out2in_node)
       if (PREDICT_TRUE (proto0 == NAT_PROTOCOL_TCP))
         {
           if (tcp0->flags & TCP_FLAG_FIN &&
-              ses0->state == jxt_SESSION_TCP_ESTABLISHED)
-            ses0->state = jxt_SESSION_TCP_CLOSE_WAIT;
+              ses0->state == DET44_SESSION_TCP_ESTABLISHED)
+            ses0->state = DET44_SESSION_TCP_CLOSE_WAIT;
           else if (tcp0->flags & TCP_FLAG_ACK &&
-                   ses0->state == jxt_SESSION_TCP_LAST_ACK)
+                   ses0->state == DET44_SESSION_TCP_LAST_ACK)
             {
               // 将会话置零，会话数量减一
               if (clib_atomic_bool_cmp_and_swap (&ses0->in_port, ses0->in_port, 0))
                 {
                   ses0 = 0;
-                  clib_atomic_add_fetch (&user0->ses_num, -1);
+                  clib_atomic_add_fetch (&table0->ses_num, -1);
                 }
             }
 
           sum0 = tcp0->checksum;
-          sum0 = ip_csum_update (sum0, old_addr0.as_u32, new_addr0.as_u32,
+          sum0 =
+              ip_csum_update (sum0, old_addr0.as_u32, new_addr0.as_u32,
                               ip4_header_t, dst_address /* changed member */);
           sum0 = ip_csum_update (sum0, old_port0, new_port0,
                                  ip4_header_t /* cheat */,
@@ -534,15 +565,15 @@ VLIB_NODE_FN (jxt_out2in_node)
       if (PREDICT_FALSE ((node->flags & VLIB_NODE_FLAG_TRACE) &&
                          (b0->flags & VLIB_BUFFER_IS_TRACED)))
         {
-          jxt_out2in_trace_t *t = vlib_add_trace (vm, node, b0, sizeof (*t));
+          det44_out2in_trace_t *t = vlib_add_trace (vm, node, b0, sizeof (*t));
           t->sw_if_index = sw_if_index0;
           t->next_index = next0;
           t->session_index = ~0;
           if (ses0)
-            t->session_index = ses_index;
+            t->session_index = ses0 - table0->my_sessions;
         }
 
-      pkts_processed += next0 != jxt_OUT2IN_NEXT_DROP;
+      pkts_processed += next0 != DET44_OUT2IN_NEXT_DROP;
 
       n_left_from--;
       next[0] = next0;
@@ -551,27 +582,27 @@ VLIB_NODE_FN (jxt_out2in_node)
   vlib_buffer_enqueue_to_next (vm, node, from, (u16 *)nexts, frame->n_vectors);
 
   vlib_node_increment_counter (vm, dm->out2in_node_index,
-                               jxt_OUT2IN_ERROR_OUT2IN_PACKETS,
+                               DET44_OUT2IN_ERROR_OUT2IN_PACKETS,
                                pkts_processed);
   return frame->n_vectors;
 }
 
 /* *INDENT-OFF* */
-VLIB_REGISTER_NODE (jxt_out2in_node) = {
-    .name = "jxt-out2in",
+VLIB_REGISTER_NODE (det44_out2in_node) = {
+    .name = "det44-out2in",
     .vector_size = sizeof (u32),
-    .format_trace = format_jxt_out2in_trace,
+    .format_trace = format_det44_out2in_trace,
     .type = VLIB_NODE_TYPE_INTERNAL,
-    .n_errors = ARRAY_LEN (jxt_out2in_error_strings),
-    .error_strings = jxt_out2in_error_strings,
-    .runtime_data_bytes = sizeof (jxt_runtime_t),
-    .n_next_nodes = jxt_OUT2IN_N_NEXT,
+    .n_errors = ARRAY_LEN (det44_out2in_error_strings),
+    .error_strings = det44_out2in_error_strings,
+    .runtime_data_bytes = sizeof (det44_runtime_t),
+    .n_next_nodes = DET44_OUT2IN_N_NEXT,
     /* edit / add dispositions here */
     .next_nodes =
         {
-            [jxt_OUT2IN_NEXT_DROP] = "error-drop",
-            [jxt_OUT2IN_NEXT_LOOKUP] = "ip4-lookup",
-            [jxt_OUT2IN_NEXT_ICMP_ERROR] = "ip4-icmp-error",
+            [DET44_OUT2IN_NEXT_DROP] = "error-drop",
+            [DET44_OUT2IN_NEXT_LOOKUP] = "ip4-lookup",
+            [DET44_OUT2IN_NEXT_ICMP_ERROR] = "ip4-icmp-error",
         },
 };
 /* *INDENT-ON* */

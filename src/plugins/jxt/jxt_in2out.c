@@ -477,7 +477,6 @@ VLIB_NODE_FN (jxt_in2out_node)
   /*********************** my modify begin *******************/
   snat_det_map_t *mp0;
   my_user_t *user0 = (my_user_t *)malloc(sizeof(my_user_t));
-  user0->in_addr.as_u32 = 0;
   my_sess_t *ses0 = 0;
   /******************** my modify end *************************/
 

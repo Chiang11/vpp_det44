@@ -32,6 +32,12 @@
 #include <nat/lib/inlines.h>
 #include <nat/lib/nat_inlines.h>
 
+///////////////////////////////////
+#include <vppinfra/bihash_8_8.h>
+#include <vppinfra/bihash_16_8.h>
+#include <stdlib.h>
+//////////////////////////////////
+
 typedef enum // 枚举类型, 表示不同的下一步处理方式
 {
   DET44_IN2OUT_NEXT_LOOKUP, // 表示需要进行下一步的查找操作。
@@ -172,8 +178,9 @@ u32 icmp_match_in2out_det (vlib_node_runtime_t *node, u32 thread_index,
         }
     }
 
-  mp0 = snat_det_map_by_user (&in_addr); // 通过in_addr（目的IPv4地址）查找对应的destination
-                                         // NAT映射
+  mp0 = snat_det_map_by_user (
+      &in_addr); // 通过in_addr（目的IPv4地址）查找对应的destination
+                 // NAT映射
   if (PREDICT_FALSE (!mp0)) // 如果没找到
     {
       if (PREDICT_FALSE (det44_translate (node, sw_if_index0, ip0,
@@ -404,23 +411,19 @@ out:
 }
 #endif
 
-/*
-函数接收一个数据包数组 frame，其中包含从内部网络接收到的数据包。
 
-它遍历数据包数组中的每个数据包，针对每个数据包执行以下操作：
 
-检查数据包的TTL（Time to
-Live）字段，如果TTL为1，则表示数据包过期，会生成一个ICMP错误报文，并向发送端发送该错误报文。
-判断数据包的传输层协议类型（TCP、UDP、ICMP等）。
-如果数据包是ICMP协议类型，则调用 det44_icmp_in2out
-函数进行ICMP数据包的处理和转换。
-如果数据包是TCP或UDP协议类型，则查找与数据包对应的Det44转换规则，并进行地址和端口的转换。
-根据转换后的地址和端口更新数据包的相关字段，比如IP头部的源地址和目的地址、传输层头部的端口等。
-根据Det44会话的状态，更新数据包的一些状态信息，比如TCP会话状态、超时时间等。
-如果找不到与数据包匹配的转换规则，则丢弃该数据包或发送ICMP错误报文。
-记录数据包处理结果，并根据需要添加跟踪信息（trace）。
-*/
-// VLIB_NODE_FN是一个宏，用于定义一个节点函数
+/*******************************************************/
+
+
+// 假设有两个外部端口范围
+#define PORT_RANGE_1_START 1024
+#define PORT_RANGE_1_END 3071
+#define PORT_RANGE_2_START 3072
+#define PORT_RANGE_2_END 5119
+#define PORT_RANGE_SIZE 2048
+
+
 VLIB_NODE_FN (det44_in2out_node)
 (vlib_main_t *vm, vlib_node_runtime_t *node,
  vlib_frame_t *frame) // frame: 包含从前一个节点传递的数据包信息的帧结构指针。
@@ -437,385 +440,13 @@ VLIB_NODE_FN (det44_in2out_node)
 
   vlib_buffer_t *bufs[VLIB_FRAME_SIZE],
       **b = bufs; // 定义缓冲区指针数组用于存储数据包的缓冲区指针。
-  u16 nexts[VLIB_FRAME_SIZE],
-      *next = nexts; // 定义下一跳数组用于存储数据包的下一跳索引。
+  u16 nexts[VLIB_FRAME_SIZE], *next = nexts; // 定义下一跳数组用于存储数据包的下一跳索引。
   vlib_get_buffers (vm, from, b, n_left_from);
 
-  while (n_left_from >= 2) // 一次处理两个数据包
-    {
-      vlib_buffer_t *b0, *b1;
-      u32 next0, next1;
-      u32 sw_if_index0, sw_if_index1;
-      ip4_header_t *ip0, *ip1;
-      ip_csum_t sum0, sum1;
-      ip4_address_t new_addr0, old_addr0, new_addr1, old_addr1;
-      u16 old_port0, new_port0, lo_port0, i0;
-      u16 old_port1, new_port1, lo_port1, i1;
-      udp_header_t *udp0, *udp1;
-      tcp_header_t *tcp0, *tcp1;
-      u32 proto0, proto1;
-      snat_det_out_key_t key0, key1;
-      snat_det_map_t *mp0, *mp1;
-      snat_det_session_t *ses0 = 0, *ses1 = 0;
-      u32 rx_fib_index0, rx_fib_index1;
-      icmp46_header_t *icmp0, *icmp1;
-
-      b0 = *b;
-      b++;
-      b1 = *b;
-      b++;
-
-      /* Prefetch next iteration. */
-      if (PREDICT_TRUE (n_left_from >= 4))
-        {
-          vlib_buffer_t *p2, *p3;
-
-          p2 = *b;
-          p3 = *(b + 1);
-
-          vlib_prefetch_buffer_header (p2, LOAD);
-          vlib_prefetch_buffer_header (p3, LOAD);
-
-          CLIB_PREFETCH (p2->data, CLIB_CACHE_LINE_BYTES, LOAD);
-          CLIB_PREFETCH (p3->data, CLIB_CACHE_LINE_BYTES, LOAD);
-        }
-
-      next0 = DET44_IN2OUT_NEXT_LOOKUP;
-      next1 = DET44_IN2OUT_NEXT_LOOKUP;
-
-      ip0 = vlib_buffer_get_current (b0);
-      udp0 = ip4_next_header (ip0);
-      tcp0 = (tcp_header_t *)udp0;
-
-      sw_if_index0 = vnet_buffer (b0)->sw_if_index[VLIB_RX];
-
-      if (PREDICT_FALSE (ip0->ttl ==
-                         1)) // TTL等于1，则数据包过期，生成一个icmp错误报文
-        {
-          vnet_buffer (b0)->sw_if_index[VLIB_TX] = (u32)~0;
-          icmp4_error_set_vnet_buffer (
-              b0, ICMP4_time_exceeded,
-              ICMP4_time_exceeded_ttl_exceeded_in_transit, 0);
-          next0 = DET44_IN2OUT_NEXT_ICMP_ERROR;
-          goto trace0;
-        }
-
-      proto0 = ip_proto_to_nat_proto (ip0->protocol);
-
-      if (PREDICT_FALSE (proto0 == NAT_PROTOCOL_ICMP))
-        {
-          rx_fib_index0 =
-              ip4_fib_table_get_index_for_sw_if_index (sw_if_index0);
-          icmp0 = (icmp46_header_t *)udp0;
-
-          // TODO:
-          next0 =
-              det44_icmp_in2out (b0, ip0, icmp0, sw_if_index0, rx_fib_index0,
-                                 node, next0, thread_index, &ses0, &mp0);
-          goto trace0;
-        }
-
-      mp0 = snat_det_map_by_user (&ip0->src_address);
-      if (PREDICT_FALSE (!mp0))
-        {
-          det44_log_info ("no match for internal host %U", format_ip4_address,
-                          &ip0->src_address);
-          next0 = DET44_IN2OUT_NEXT_DROP;
-          b0->error = node->errors[DET44_IN2OUT_ERROR_NO_TRANSLATION];
-          goto trace0;
-        }
-
-      snat_det_forward (mp0, &ip0->src_address, &new_addr0, &lo_port0);
-
-      key0.ext_host_addr = ip0->dst_address;
-      key0.ext_host_port = tcp0->dst;
-
-      ses0 = snat_det_find_ses_by_in (mp0, &ip0->src_address, tcp0->src, key0);
-      if (PREDICT_FALSE (!ses0))
-        {
-          for (i0 = 0; i0 < mp0->ports_per_host; i0++)
-            {
-              key0.out_port = clib_host_to_net_u16 (
-                  lo_port0 + ((i0 + clib_net_to_host_u16 (tcp0->src)) %
-                              mp0->ports_per_host));
-
-              if (snat_det_get_ses_by_out (mp0, &ip0->src_address,
-                                           key0.as_u64))
-                continue;
-
-              ses0 = snat_det_ses_create (thread_index, mp0, &ip0->src_address,
-                                          tcp0->src, &key0);
-              break;
-            }
-          if (PREDICT_FALSE (!ses0))
-            {
-              /* too many sessions for user, send ICMP error packet */
-              vnet_buffer (b0)->sw_if_index[VLIB_TX] = (u32)~0;
-              icmp4_error_set_vnet_buffer (
-                  b0, ICMP4_destination_unreachable,
-                  ICMP4_destination_unreachable_destination_unreachable_host,
-                  0);
-              next0 = DET44_IN2OUT_NEXT_ICMP_ERROR;
-              goto trace0;
-            }
-        }
-
-      old_port0 = udp0->src_port;
-      udp0->src_port = new_port0 = ses0->out.out_port;
-
-      old_addr0.as_u32 = ip0->src_address.as_u32;
-      ip0->src_address.as_u32 = new_addr0.as_u32;
-      vnet_buffer (b0)->sw_if_index[VLIB_TX] = dm->outside_fib_index;
-
-      sum0 = ip0->checksum;
-      sum0 = ip_csum_update (sum0, old_addr0.as_u32, new_addr0.as_u32,
-                             ip4_header_t, src_address /* changed member */);
-      ip0->checksum = ip_csum_fold (sum0);
-
-      if (PREDICT_TRUE (proto0 == NAT_PROTOCOL_TCP))
-        {
-          if (tcp0->flags & TCP_FLAG_SYN)
-            ses0->state = DET44_SESSION_TCP_SYN_SENT;
-          else if (tcp0->flags & TCP_FLAG_ACK &&
-                   ses0->state == DET44_SESSION_TCP_SYN_SENT)
-            ses0->state = DET44_SESSION_TCP_ESTABLISHED;
-          else if (tcp0->flags & TCP_FLAG_FIN &&
-                   ses0->state == DET44_SESSION_TCP_ESTABLISHED)
-            ses0->state = DET44_SESSION_TCP_FIN_WAIT;
-          else if (tcp0->flags & TCP_FLAG_ACK &&
-                   ses0->state == DET44_SESSION_TCP_FIN_WAIT)
-            snat_det_ses_close (mp0, ses0);
-          else if (tcp0->flags & TCP_FLAG_FIN &&
-                   ses0->state == DET44_SESSION_TCP_CLOSE_WAIT)
-            ses0->state = DET44_SESSION_TCP_LAST_ACK;
-          else if (tcp0->flags == 0 && ses0->state == DET44_SESSION_UNKNOWN)
-            ses0->state = DET44_SESSION_TCP_ESTABLISHED;
-
-          sum0 = tcp0->checksum;
-          sum0 =
-              ip_csum_update (sum0, old_addr0.as_u32, new_addr0.as_u32,
-                              ip4_header_t, dst_address /* changed member */);
-          sum0 = ip_csum_update (sum0, old_port0, new_port0,
-                                 ip4_header_t /* cheat */,
-                                 length /* changed member */);
-          mss_clamping (dm->mss_clamping, tcp0, &sum0);
-          tcp0->checksum = ip_csum_fold (sum0);
-        }
-      else
-        {
-          ses0->state = DET44_SESSION_UDP_ACTIVE;
-
-          if (PREDICT_FALSE (udp0->checksum))
-            {
-              sum0 = udp0->checksum;
-              sum0 = ip_csum_update (sum0, old_addr0.as_u32, new_addr0.as_u32,
-                                     ip4_header_t,
-                                     dst_address /* changed member */);
-              sum0 = ip_csum_update (sum0, old_port0, new_port0,
-                                     ip4_header_t /* cheat */,
-                                     length /* changed member */);
-              udp0->checksum = ip_csum_fold (sum0);
-            }
-        }
-
-      switch (ses0->state)
-        {
-        case DET44_SESSION_UDP_ACTIVE:
-          ses0->expire = now + dm->timeouts.udp;
-          break;
-        case DET44_SESSION_TCP_SYN_SENT:
-        case DET44_SESSION_TCP_FIN_WAIT:
-        case DET44_SESSION_TCP_CLOSE_WAIT:
-        case DET44_SESSION_TCP_LAST_ACK:
-          ses0->expire = now + dm->timeouts.tcp.transitory;
-          break;
-        case DET44_SESSION_TCP_ESTABLISHED:
-          ses0->expire = now + dm->timeouts.tcp.established;
-          break;
-        }
-
-    trace0:
-      if (PREDICT_FALSE ((node->flags & VLIB_NODE_FLAG_TRACE) &&
-                         (b0->flags & VLIB_BUFFER_IS_TRACED)))
-        {
-          det44_in2out_trace_t *t = vlib_add_trace (vm, node, b0, sizeof (*t));
-          t->sw_if_index = sw_if_index0;
-          t->next_index = next0;
-          t->session_index = ~0;
-          if (ses0)
-            t->session_index = ses0 - mp0->sessions;
-        }
-
-      pkts_processed += next0 != DET44_IN2OUT_NEXT_DROP;
-
-      ip1 = vlib_buffer_get_current (b1);
-      udp1 = ip4_next_header (ip1);
-      tcp1 = (tcp_header_t *)udp1;
-
-      sw_if_index1 = vnet_buffer (b1)->sw_if_index[VLIB_RX];
-
-      if (PREDICT_FALSE (ip1->ttl == 1))
-        {
-          vnet_buffer (b1)->sw_if_index[VLIB_TX] = (u32)~0;
-          icmp4_error_set_vnet_buffer (
-              b1, ICMP4_time_exceeded,
-              ICMP4_time_exceeded_ttl_exceeded_in_transit, 0);
-          next1 = DET44_IN2OUT_NEXT_ICMP_ERROR;
-          goto trace1;
-        }
-
-      proto1 = ip_proto_to_nat_proto (ip1->protocol);
-
-      if (PREDICT_FALSE (proto1 == NAT_PROTOCOL_ICMP))
-        {
-          rx_fib_index1 =
-              ip4_fib_table_get_index_for_sw_if_index (sw_if_index1);
-          icmp1 = (icmp46_header_t *)udp1;
-
-          next1 =
-              det44_icmp_in2out (b1, ip1, icmp1, sw_if_index1, rx_fib_index1,
-                                 node, next1, thread_index, &ses1, &mp1);
-          goto trace1;
-        }
-
-      mp1 = snat_det_map_by_user (&ip1->src_address);
-      if (PREDICT_FALSE (!mp1))
-        {
-          det44_log_info ("no match for internal host %U", format_ip4_address,
-                          &ip0->src_address);
-          next1 = DET44_IN2OUT_NEXT_DROP;
-          b1->error = node->errors[DET44_IN2OUT_ERROR_NO_TRANSLATION];
-          goto trace1;
-        }
-
-      snat_det_forward (mp1, &ip1->src_address, &new_addr1, &lo_port1);
-
-      key1.ext_host_addr = ip1->dst_address;
-      key1.ext_host_port = tcp1->dst;
-
-      ses1 = snat_det_find_ses_by_in (mp1, &ip1->src_address, tcp1->src, key1);
-      if (PREDICT_FALSE (!ses1))
-        {
-          for (i1 = 0; i1 < mp1->ports_per_host; i1++)
-            {
-              key1.out_port = clib_host_to_net_u16 (
-                  lo_port1 + ((i1 + clib_net_to_host_u16 (tcp1->src)) %
-                              mp1->ports_per_host));
-
-              if (snat_det_get_ses_by_out (mp1, &ip1->src_address,
-                                           key1.as_u64))
-                continue;
-
-              ses1 = snat_det_ses_create (thread_index, mp1, &ip1->src_address,
-                                          tcp1->src, &key1);
-              break;
-            }
-          if (PREDICT_FALSE (!ses1))
-            {
-              /* too many sessions for user, send ICMP error packet */
-              vnet_buffer (b1)->sw_if_index[VLIB_TX] = (u32)~0;
-              icmp4_error_set_vnet_buffer (
-                  b1, ICMP4_destination_unreachable,
-                  ICMP4_destination_unreachable_destination_unreachable_host,
-                  0);
-              next1 = DET44_IN2OUT_NEXT_ICMP_ERROR;
-              goto trace1;
-            }
-        }
-
-      old_port1 = udp1->src_port;
-      udp1->src_port = new_port1 = ses1->out.out_port;
-
-      old_addr1.as_u32 = ip1->src_address.as_u32;
-      ip1->src_address.as_u32 = new_addr1.as_u32;
-      vnet_buffer (b1)->sw_if_index[VLIB_TX] = dm->outside_fib_index;
-
-      sum1 = ip1->checksum;
-      sum1 = ip_csum_update (sum1, old_addr1.as_u32, new_addr1.as_u32,
-                             ip4_header_t, src_address /* changed member */);
-      ip1->checksum = ip_csum_fold (sum1);
-
-      if (PREDICT_TRUE (proto1 == NAT_PROTOCOL_TCP))
-        {
-          if (tcp1->flags & TCP_FLAG_SYN)
-            ses1->state = DET44_SESSION_TCP_SYN_SENT;
-          else if (tcp1->flags & TCP_FLAG_ACK &&
-                   ses1->state == DET44_SESSION_TCP_SYN_SENT)
-            ses1->state = DET44_SESSION_TCP_ESTABLISHED;
-          else if (tcp1->flags & TCP_FLAG_FIN &&
-                   ses1->state == DET44_SESSION_TCP_ESTABLISHED)
-            ses1->state = DET44_SESSION_TCP_FIN_WAIT;
-          else if (tcp1->flags & TCP_FLAG_ACK &&
-                   ses1->state == DET44_SESSION_TCP_FIN_WAIT)
-            snat_det_ses_close (mp1, ses1);
-          else if (tcp1->flags & TCP_FLAG_FIN &&
-                   ses1->state == DET44_SESSION_TCP_CLOSE_WAIT)
-            ses1->state = DET44_SESSION_TCP_LAST_ACK;
-          else if (tcp1->flags == 0 && ses1->state == DET44_SESSION_UNKNOWN)
-            ses1->state = DET44_SESSION_TCP_ESTABLISHED;
-
-          sum1 = tcp1->checksum;
-          sum1 =
-              ip_csum_update (sum1, old_addr1.as_u32, new_addr1.as_u32,
-                              ip4_header_t, dst_address /* changed member */);
-          sum1 = ip_csum_update (sum1, old_port1, new_port1,
-                                 ip4_header_t /* cheat */,
-                                 length /* changed member */);
-          mss_clamping (dm->mss_clamping, tcp1, &sum1);
-          tcp1->checksum = ip_csum_fold (sum1);
-        }
-      else
-        {
-          ses1->state = DET44_SESSION_UDP_ACTIVE;
-
-          if (PREDICT_FALSE (udp1->checksum))
-            {
-              sum1 = udp1->checksum;
-              sum1 = ip_csum_update (sum1, old_addr1.as_u32, new_addr1.as_u32,
-                                     ip4_header_t,
-                                     dst_address /* changed member */);
-              sum1 = ip_csum_update (sum1, old_port1, new_port1,
-                                     ip4_header_t /* cheat */,
-                                     length /* changed member */);
-              udp1->checksum = ip_csum_fold (sum1);
-            }
-        }
-
-      switch (ses1->state)
-        {
-        case DET44_SESSION_UDP_ACTIVE:
-          ses1->expire = now + dm->timeouts.udp;
-          break;
-        case DET44_SESSION_TCP_SYN_SENT:
-        case DET44_SESSION_TCP_FIN_WAIT:
-        case DET44_SESSION_TCP_CLOSE_WAIT:
-        case DET44_SESSION_TCP_LAST_ACK:
-          ses1->expire = now + dm->timeouts.tcp.transitory;
-          break;
-        case DET44_SESSION_TCP_ESTABLISHED:
-          ses1->expire = now + dm->timeouts.tcp.established;
-          break;
-        }
-
-    trace1:
-      if (PREDICT_FALSE ((node->flags & VLIB_NODE_FLAG_TRACE) &&
-                         (b1->flags & VLIB_BUFFER_IS_TRACED)))
-        {
-          det44_in2out_trace_t *t = vlib_add_trace (vm, node, b1, sizeof (*t));
-          t->sw_if_index = sw_if_index1;
-          t->next_index = next1;
-          t->session_index = ~0;
-          if (ses1)
-            t->session_index = ses1 - mp1->sessions;
-        }
-
-      pkts_processed += next1 != DET44_IN2OUT_NEXT_DROP;
-
-      n_left_from -= 2;
-      next[0] = next0;
-      next[1] = next1;
-      next += 2;
-    }
+  /*********************** my modify begin *******************/
+  my_map_t *mp0;
+  my_session_t *ses0 = 0;
+  /******************** my modify end *************************/
 
   while (n_left_from > 0) // 最后剩下一个，就处理一个
     {
@@ -824,21 +455,19 @@ VLIB_NODE_FN (det44_in2out_node)
       u32 sw_if_index0;
       ip4_header_t *ip0;
       ip_csum_t sum0;
-      ip4_address_t new_addr0, old_addr0;
-      u16 old_port0, new_port0, lo_port0, i0;
+
       udp_header_t *udp0;
       tcp_header_t *tcp0;
       u32 proto0;
       snat_det_out_key_t key0;
-      snat_det_map_t *mp0;
-      snat_det_session_t *ses0 = 0;
+
       u32 rx_fib_index0;
       icmp46_header_t *icmp0;
 
       b0 = *b;
       b++;
       // 当前数据包处理完成后的下一步操作，初始值为DET44_IN2OUT_NEXT_LOOKUP。
-      next0 = DET44_IN2OUT_NEXT_LOOKUP; 
+      next0 = DET44_IN2OUT_NEXT_LOOKUP;
 
       ip0 = vlib_buffer_get_current (b0);
       udp0 = ip4_next_header (ip0);
@@ -846,7 +475,12 @@ VLIB_NODE_FN (det44_in2out_node)
 
       sw_if_index0 = vnet_buffer (b0)->sw_if_index[VLIB_RX];
 
-      // // 检查IPv4数据包的TTL（Time To Live）字段是否为1
+      /*********************** my modify begin *******************/
+      ip4_address_t new_addr0 = {0}, old_addr0;
+      u16 old_port0, new_port0, lo_port0, i0;
+      /******************** my modify end *************************/
+
+      // 检查IPv4数据包的TTL（Time To Live）字段是否为1
       if (PREDICT_FALSE (ip0->ttl == 1))
         {
           vnet_buffer (b0)->sw_if_index[VLIB_TX] = (u32)~0;
@@ -872,55 +506,130 @@ VLIB_NODE_FN (det44_in2out_node)
           goto trace00;
         }
 
+      /***********************************************************/
+      /*********************** my modify begin *******************/
       // 根据 源ip地址 查找映射表
-      mp0 = snat_det_map_by_user (&ip0->src_address);
+      clib_bihash_kv_8_8_t kv;
+      clib_bihash_kv_8_8_t value;
+      kv.key = (u64)(ip0->src_address.as_u32 & ip4_main.fib_masks[MY_PLEN] )<< 32;
+      kv.value = 0;
+      value.key = 0;
+      value.value = 0;
+      clib_bihash_search_8_8 (&det44_main.in_addr_hash_table, &kv, &value);
+      // if (rv == 0) {
+      //     // 键存在于哈希表中，输出键值对的内容
+      //     vlib_cli_output (vm, "键: %llu, 值: %u\n", kv.key, value.value);
+      // } else {
+      //     // 键不存在于哈希表中，输出未找到的信息
+      //     vlib_cli_output (vm, "未找到键: %llu\n", kv.key);
+      // }
 
-      // 没找到映射表
-      if (PREDICT_FALSE (!mp0))
+      if (PREDICT_FALSE (value.value >= MY_MAX_DET_MAPS))
         {
-          det44_log_info ("no match for internal host %U", format_ip4_address,
-                          &ip0->src_address);
-          next0 = DET44_IN2OUT_NEXT_DROP; // 设置下一步为丢弃数据包
-          b0->error =
-              node->errors[DET44_IN2OUT_ERROR_NO_TRANSLATION]; // 设置错误类型
+          // 没找到对应的映射表，处理错误逻辑
+          det44_log_info ("no match mapping for internal host ip %U",
+                          format_ip4_address, &ip0->src_address);
+          next0 = DET44_IN2OUT_NEXT_DROP;
+          b0->error = node->errors[DET44_IN2OUT_ERROR_NO_TRANSLATION];
           goto trace00;
         }
 
-      // 根据 源ip ，该映射表的起始地址 ，共享比例 计算外部地址 new_addr0
-      // 计算 源up 对应的端口范围起始值 lo_port0
-      snat_det_forward (mp0, &ip0->src_address, &new_addr0,
-                        &lo_port0); 
+      mp0 = &dm->my_maps[value.value];
 
-      // 存进 det44 会话中
+      // 查找映射的外部地址相应的会话表
+      // 计算偏移量
+      // ip0->src_address.as_u8 为 192.168.10.0 - 192.168.10.127
+      u32 table_index = (ip0->src_address.as_u8[3] / 2);
+      if (table_index >= 64)
+        {
+          det44_log_info ("invalid internal host ip %U", format_ip4_address,
+                          &ip0->src_address);
+          next0 = DET44_IN2OUT_NEXT_DROP;
+          b0->error = node->errors[DET44_IN2OUT_ERROR_NO_TRANSLATION];
+          goto trace00;
+        }
+
+      my_session_table_t *table0 = &mp0->my_sessions_tables[table_index];
+
+      // 将外部起始地址与偏移量相加得到映射到的外部地址
+      new_addr0.as_u32 = clib_host_to_net_u32 (
+          clib_net_to_host_u32 (mp0->out_addr.as_u32) + table_index);
+      // 是这个外部地址下的第一段或第二段端口范围
+      u32 port_range_index = (ip0->src_address.as_u8[3] % 2);
+      // u16 port_range_start, port_range_end;
+      u16 port_range_start;
+      if (port_range_index == 0)
+        {
+          port_range_start = PORT_RANGE_1_START;
+          // port_range_end = PORT_RANGE_1_END;
+        }
+      else
+        {
+          port_range_start = PORT_RANGE_2_START;
+          // port_range_end = PORT_RANGE_2_END;
+        }
+
+      // 计算要映射的外部端口，临时端口
+      lo_port0 = port_range_start;
+
+      // 根据源ip，目标ip和端口查找会话
       key0.ext_host_addr = ip0->dst_address; // 目标ip地址
       key0.ext_host_port = tcp0->dst;        // 目标端口
 
-      // 通过 源目ip，源目端口 查找会话
-      ses0 = snat_det_find_ses_by_in (mp0, &ip0->src_address, tcp0->src, key0);
+      // 找到映射的外部地址对应的会话
+      bool is_find = false;
+      for (i0 = 0; i0 < MY_SESSIONS_PER_EXTERNAL_ADDR / 2; i0++)
+        {
+          ses0 = &table0->my_sessions[i0 + lo_port0];
+          if (ses0->expire <= now)
+            {
+              continue; // 跳过已超时的会话
+            }
+          if (ses0->in_port == tcp0->src &&
+              ses0->out.ext_host_addr.as_u32 == key0.ext_host_addr.as_u32 &&
+              ses0->out.ext_host_port == key0.ext_host_port && ses0->expire <= now)
+            {
+              // 找到
+              new_port0 = i0 + lo_port0;
+              is_find = true;
+              break;
+            }
+        }
+      // 没找到
+      if (!is_find) ses0 = 0;
+
+      /******************** my modify end *************************/
+      /***********************************************************/
 
       // 没找到，则创建会话
       if (PREDICT_FALSE (!ses0))
         {
+          bool is_create = false;
           // 循环会尝试不同的目标端口，直到找到一个可用的目标端口
-          for (i0 = 0; i0 < mp0->ports_per_host; i0++) 
-            { 
-              // 根据 源端口 计算一个新的外部端口
-              key0.out_port = clib_host_to_net_u16 (
-                  lo_port0 + ((i0 + clib_net_to_host_u16 (tcp0->src)) %
-                              mp0->ports_per_host));
+          for (i0 = 0; i0 < MY_SESSIONS_PER_EXTERNAL_ADDR / 2; i0++)
+            {
+              new_port0 = i0 + lo_port0;
+              ses0 = &table0->my_sessions[new_port0];
 
-              // 根据目标ip，目标端口和外部端口查找是否有已经使用该外部端口的会话
-              // 如果目标端口已经被其他会话占用，则继续尝试下一个目标端口
-              if (snat_det_get_ses_by_out (mp0, &ip0->src_address, key0.as_u64))
-                continue; 
-
-              // 创建会话
-              ses0 = snat_det_ses_create (thread_index, mp0, &ip0->src_address,
-                                          tcp0->src, &key0);
-              break;
+              // 表示这个端口还没被用过
+              if (ses0->in_port == 0)
+                {
+                  if (clib_atomic_bool_cmp_and_swap (&ses0->in_port, 0,
+                                                     udp0->src_port))
+                    {
+                      ses0->in_port = udp0->src_port;
+                      ses0->out.ext_host_addr.as_u32 = key0.ext_host_addr.as_u32;
+                      ses0->out.ext_host_port = key0.ext_host_port;
+                      ses0->state = DET44_SESSION_UNKNOWN;
+                      ses0->expire = now + dm->timeouts.tcp.transitory;
+                      clib_atomic_add_fetch (&table0->ses_num, 1);
+                      is_create = true;
+                      break;
+                    }
+                }
             }
           // Det44会话数量达到上限，将数据包丢弃，并发送ICMP错误报文，通知发送者无法建立新的连接
-          if (PREDICT_FALSE (!ses0)) 
+          if (!is_create)
             {
               /* too many sessions for user, send ICMP error packet */
               vnet_buffer (b0)->sw_if_index[VLIB_TX] = (u32)~0;
@@ -932,13 +641,18 @@ VLIB_NODE_FN (det44_in2out_node)
               goto trace00;
             }
         }
+
       // 如果能查到会话，则直接使用查到的会话中的地址和端口号，而不是
       // snat_det_forward 转换后的地址和端口号
       old_port0 = udp0->src_port;
-      udp0->src_port = new_port0 = ses0->out.out_port;
+      udp0->src_port = ses0->out.out_port = new_port0;
 
       old_addr0.as_u32 = ip0->src_address.as_u32;
       ip0->src_address.as_u32 = new_addr0.as_u32;
+
+
+      //  vlib_cli_output (vm, "sessions tables index: %d, in %U/%d out %U/%d dst %U/%d\n", value.value, format_ip4_address,
+      //     &old_addr0, old_port0, format_ip4_address, &new_addr0, new_port0, format_ip4_address, &ip0->dst_address, tcp0->dst);
 
       // 将数据包的输出接口设置为Det44会话中指定的外部FIB表的索引值。这是为了确保转换后的数据包能够正确地路由出去。
       vnet_buffer (b0)->sw_if_index[VLIB_TX] = dm->outside_fib_index;
@@ -963,7 +677,8 @@ VLIB_NODE_FN (det44_in2out_node)
             ses0->state = DET44_SESSION_TCP_FIN_WAIT;
           else if (tcp0->flags & TCP_FLAG_ACK &&
                    ses0->state == DET44_SESSION_TCP_FIN_WAIT)
-            snat_det_ses_close (mp0, ses0);
+            snat_det_ses_close ((snat_det_map_t *)mp0,
+                                (snat_det_session_t *)ses0);
           else if (tcp0->flags & TCP_FLAG_FIN &&
                    ses0->state == DET44_SESSION_TCP_CLOSE_WAIT)
             ses0->state = DET44_SESSION_TCP_LAST_ACK;
@@ -971,8 +686,7 @@ VLIB_NODE_FN (det44_in2out_node)
             ses0->state = DET44_SESSION_TCP_ESTABLISHED;
 
           sum0 = tcp0->checksum;
-          sum0 =
-              ip_csum_update (sum0, old_addr0.as_u32, new_addr0.as_u32,
+          sum0 = ip_csum_update (sum0, old_addr0.as_u32, new_addr0.as_u32,
                               ip4_header_t, dst_address /* changed member */);
           sum0 = ip_csum_update (sum0, old_port0, new_port0,
                                  ip4_header_t /* cheat */,
@@ -1023,7 +737,7 @@ VLIB_NODE_FN (det44_in2out_node)
           t->next_index = next0;
           t->session_index = ~0;
           if (ses0)
-            t->session_index = ses0 - mp0->sessions;
+            t->session_index = ses0 - table0->my_sessions;
         }
 
       pkts_processed += next0 != DET44_IN2OUT_NEXT_DROP;
