@@ -14,6 +14,7 @@
 ###############################################################################
 
 源码in2out思路：（括号内为对应的文件和代码行数）
+
 1.首先检查TTL是否为1以及是否是icmp(./det44_in2out.c: 849-873)
 
 2.根据源ip查找映射表，没找到则丢弃(./det44_in2out.c: 876-887)，
@@ -48,8 +49,11 @@ det_main：my_user[8k]
         
 
 改进in2out思路：
+
 1、根据in_addr查找in_hash_table。 
+
 2、若能查到，则获得 in_addr 对应数据结构my_user的索引user_idx。转到步骤4。  
+
 3、若不能查到，遍历用户数据结构my_user，找到一个 sess_nums=0 的my_user填入in_addr： 
     det_main中维护一个last_user_index的索引，表示上一次 创建 用户结构的索引 
     每次新来的查不到 in_hash 的 in_addr 就从 last_user_index 开始遍历， 
@@ -57,25 +61,38 @@ det_main：my_user[8k]
         若哈希表已满，删掉原来的哈希条目，再添加 
         若哈希表未满，添加 
     若遍历完了，还没找到则报错 
+    
 4、通过该索引i获得该in_addr对应的数据结构my_user[user_idx]。获取其中的 out_addr 
+
 5、通过该数据结构中的会话索引数组 my_sess_index_by_in，将数据包中的 in_port 作为索引， 
     查找会话索引 ses_idx = my_sess_index_by_in[in_port]。 
+    
 6、若ses_idx为有效值，说明已经存在会话信息，但还不确定是否为该in_port的会话，以及是否超时。转到步骤8。 
     （因为in_port可以从64k个里面随机一个，但是out_port的范围只有2k，意味着32个in_port会对应一个out_port， 
     这时候就要判断拿到会话中的in_port是不是这次数据包的in_port）
+    
 7、若 ses_idx 为合法值（!= 0xFFFF，因为总共只有2k个会话），且会话数据结构my_sess[ses_idx]中的端口等于in_port，且未超时，则使用该会话即可
+
 8、除此之外，都需要新创建会话信息（ses_idx非法，或者合法但是会话端口不等于in_port，或者超时），
     从上一次创建会话的索引开始，遍历下一个会话，若该会话端口为0或超时，使用，并更新会话信息，即my_sess[i0].in_port 和 expire 
+    
 9、此时已经拿到一个有效会话及其索引ses_idx，更新 my_sess_index_by_in[in_port] 对应的索引（方便下次来的时候直接找到这个会话） 
     则out_port = lo_port + ses_idx （out_port 和 每个sess 是一一对应关系）。 
 
 out2in思路：
+
 1、根据out_addr以及 out_port_index_by_out_addr = (out_port - 1024) % 2048 （即0或1） 查找out_hash_table。 
+
 2、若能查到，获取my_user的索引user_index。转到步骤4. 
+
 3、若不能查到，丢弃该数据包。 
+
 4、通过该索引user_index获得对应的数据结构my_user[user_index]，从中获得in_addr。 
+
 5、根据dst_addr（即out_addr），计算会话索引 ses_idx = out_port - lo_port 
+
 6、根据 ses_idx 得到对应的会话 my_sess[ses_idx]，判断是否超时 
+
 7、若超时，丢弃数据包。若未超时，获取其中的in_port。
 
 存在问题：
@@ -89,6 +106,7 @@ out2in思路：
 一、0901，改进代码2：增加动态地址管理，采用多线程。实现动态添加内外地址池，动态选择映射出口和端口。
 
 主要思想：
+
 1、多个线程，每个线程负责一部分独有的out_addr，这样不会出现数据竞争，因为不这么做，不同的线程可能对同一个out_addr下的信息修改。而不是采用锁，因为锁的效率很低，开销很大。
 
 2、每个线程对五元组进行负载，采用哈希的方式将同一个流映射到同一个out_addr和out_port上。而不是采用用户遍历和会话遍历，提升效率
@@ -100,53 +118,87 @@ out2in思路：
 5、提供了 添加、删除 内网地址的接口，可以在控制面进行操作，而不是在数据面，提高了数据包处理效率
 
 大概流程：
+
 Inout：
+
 1、通过in_addr查找 in_addr_hash，若没找到，丢弃。
+
 2、获取线程索引 thread_id，根据 in_addr 和 in_port 通过哈希拿到一个下标索引 out_addr_idx 和 ses_idx，这样就拿到了out_addr 这个数据结构，以及下面的会话信息。
+
 3、若查不到，说明是新的流，创建
+
     若找到的 out_addr 中的地址值为非法（out_addr下线）：选择out_addr，选择out_port
 选择out_addr：从上一次选择的位置开始循环遍历，若 out_addr 值为非法值，使用。
+
     若找到 out_addr ，但找到的 ses 非法（端口为0或超时）：选择out_port
+    
 判断ses_num是否小于64k，若大于等于，重新选择out_addr。
+
 选择out_port：从上一次创建会话的位置遍历 out_addr 这个结构下面的会话数组，找到一个 out_port=0 或超时的会话，使用，得到out_port，
+
 添加 in2out_hash：in_addr+in_port到 out_addr_idx 和 ses_idx 的哈希条目，针对超时的情况，删除原本会话存储信息中in_addr+in_port 到这个地址和会话索引的哈希条目，这样才能正常老化会话信息。
+
 添加out2in_hash：添加 out_addr 到 thread_idx 和 out_addr_idx  的哈希条目，方便out2in。
 
 out2in：
+
 1、通过 out_addr 查找 thread_idx 和 out_addr_idx，若没有找到，丢弃，若找到，根据拿到的out_addr结构，在其中根据out_port拿到对应会话，判断是否超时，超时则丢弃
+
 8k个用户
+
 4k个out_addr
 
 数据结构：
+
 det_main：
+
 内网地址池哈希：in_addr_hash
+
 从外到内哈希：in2out_hash，
+
 从外到内哈希：out2in_hash，
+
 上一次分配地址给时的线程的索引 last_thread_idx，
+
 不同线程下的out_addr池，每个是 my_out 类型：address_pools[thread_id][out_addr_idx]，
+
 每个线程上一次选择地址的索引：last_addr_select_idx[thread_nums]，
+
 每个线程上一次添加地址的索引：last_addr_add_idx[thread_nums]，
+
     my_out：out_addr，last_port_idx，my_sess[64k]，out_port_start，sess_nums， 
         my_sess：in_addr，in_port，expire，state
 
 添加地址池：
+
 需要手动添加外部地址池 和 内部地址池：添加 jxt add in <in_addr>， jxt add out <out_addr>两个接口。
+
 jxt add in <in_addr>：添加 in_addr_hash 哈希条目。
+
 jxt add out <out_addr>：
+
 记录last_thread_idx，表示当前应该将这个out_addr分配给哪个线程，这样每个线程会维护一个自己的地址池
+
 得到上一次在该线程上添加地址的索引： add_idx0= last_addr_add_idx[last_thread_idx] ，从 address_pools[last_thread_idx][add_idx0]] 开始遍历，若其中out_addr为'-1'，即非法值，将值置为新的out_addr值
+
 添加out2in_hash：添加该 out_addr 到 thread_idx 和 out_addr_idx 的哈希条目，方便out2in。
 
 删除out_addr：
+
 根据从外到内的哈希 out2in_hash，通过 out_addr 找到线程索引thread_idx，和在该线程地址池上的位置out_addr_idx。
+
 将 out0 = address_pools[thread_idx][out_addr_idx] 中的out_addr值置为非法值，表示删除该地址，将其下会话信息清零。同时删除out2in_hash 中对应的哈希条目
 
 删除in_addr：
+
 遍历 in_addr 下的每一个in_port，对于每一组 in_addr+in_port，删除 in2out_hash中相应条目，删除in_addr_hash 哈希条目，这样就可以使得该in_addr下线。
 
 选择地址：
+
 根据thread_id，得到上一次选择地址的位置索引 select_idx0=last_addr_select_idx[thread_id]，
+
 则从address_pools[thread_idx][select_idx0] 开始遍历，若其中out_addr为'-1'，即非法值，跳过。若为合法值，选择使用，获取其中 last_port_idx 等信息
+
 
 
 ##################################################################################
